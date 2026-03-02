@@ -44,7 +44,22 @@ git tag v0.0.1
 git push origin v0.0.1
 ```
 
-## 注意事项
-
-- 不要提交真实 Token、凭据或私有仓库地址。
 - 发版前确认本地可正常启动 `npm run tauri dev`。
+
+## 安装指南
+
+### macOS 提示“应用已损坏，无法打开”的解决办法
+
+由于 Github Actions 自动打包的应用程序没有经过 Apple 开发者昂贵的 `$99/年` 签名公证（Notarization），macOS 的安全机制（Gatekeeper）会默认拦截并提示文件已损坏。
+
+**解决方法：**
+
+1. 将下载的 `拾页.app` 拖入到系统的 **“应用程序 (Applications)”** 文件夹中。
+2. 打开“终端 (Terminal)”，执行以下命令移除应用的隔离属性（可能需要输入开机密码）：
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/拾页.app
+```
+*(如果是旧版本名称，则替换上面的 `拾页.app` 为 `bookmark-sync-app.app` 等实际应用名。)*
+
+执行完毕后，双击应用即可正常畅通打开！

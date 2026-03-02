@@ -89,3 +89,10 @@
 - **Changed Files**:
 - `bookmark-sync-app/src-tauri/tauri.conf.json`
 ----------------------------------------
+## [2026-03-02 11:49] [Feature]
+- **Change**: 在 README 中增补 macOS 隔离属性（Gatekeeper）移除的相关文档说明，方便后续安装使用。
+- **Risk Analysis**: 无风险；补充项目说明文档
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `README.md`
+----------------------------------------
