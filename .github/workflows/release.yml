@@ -35,7 +35,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Frontend Dependencies
-        working-directory: ./bookmark-sync-app
+        working-directory: ./
         run: npm install
 
       - name: Build and Release Tauri App
@@ -43,25 +43,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: "./bookmark-sync-app"
+          projectPath: "./"
           tagName: ${{ github.ref_name }}
           releaseName: "Bookmark Sync ${{ github.ref_name }}"
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
-
-      - name: Package Browser Extension (macOS Only)
-        if: matrix.platform == 'macos-latest'
-        run: |
-          cd browser-extension
-          zip -r ../bookmark-sync-extension-${{ github.ref_name }}.zip ./*
-          cd ..
-
-      - name: Upload Browser Extension to Release
-        if: matrix.platform == 'macos-latest'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: bookmark-sync-extension-${{ github.ref_name }}.zip
-          tag_name: ${{ github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

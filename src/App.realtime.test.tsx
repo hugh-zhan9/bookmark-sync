@@ -16,6 +16,10 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: listenMock,
 }));
 
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openUrl: vi.fn(),
+}));
+
 describe('App realtime refresh', () => {
   beforeEach(() => {
     invokeMock.mockReset();

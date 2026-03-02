@@ -6,8 +6,8 @@
 
 ## 2. 架构总览
 
-- 前端：React + TypeScript（`bookmark-sync-app/src`）
-- 后端：Tauri + Rust（`bookmark-sync-app/src-tauri/src`）
+- 前端：React + TypeScript（`src`）
+- 后端：Tauri + Rust（`src-tauri/src`）
 - 本地存储：SQLite（书签实体 + 关系表 + 应用设置）
 - 事件模型：Event Sourcing（`EventLog` 回放）
 - 远程同步：本机 Git 仓库目录中的 `events/events.ndjson`

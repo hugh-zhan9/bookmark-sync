@@ -3,8 +3,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import App from './App';
 
-const { invokeMock } = vi.hoisted(() => ({
+const { invokeMock, openUrlMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
+  openUrlMock: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -15,6 +16,10 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => {}),
 }));
 
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openUrl: openUrlMock,
+}));
+
 describe('App bookmark management', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -23,6 +28,7 @@ describe('App bookmark management', () => {
 
   beforeEach(() => {
     invokeMock.mockReset();
+    openUrlMock.mockReset();
     let getFoldersCount = 0;
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === 'get_folders') {
@@ -82,6 +88,9 @@ describe('App bookmark management', () => {
       }
       if (cmd === 'search_bookmarks') {
         return [];
+      }
+      if (cmd === 'check_bookmark_exists') {
+        return { exists: false, title: null };
       }
       if (cmd === 'update_bookmark' || cmd === 'rename_folder' || cmd === 'remove_bookmark_from_folder' || cmd === 'add_bookmark_to_folder' || cmd === 'remove_tag_from_bookmark' || cmd === 'add_tag_to_bookmark' || cmd === 'create_folder' || cmd === 'delete_folder' || cmd === 'set_delete_sync_setting' || cmd === 'set_browser_auto_sync_settings' || cmd === 'set_git_sync_repo_dir' || cmd === 'delete_bookmark' || cmd === 'write_debug_log' || cmd === 'set_event_auto_sync_settings' || cmd === 'sync_event_pull_only' || cmd === 'sync_event_push_only' || cmd === 'sync_github_incremental' || cmd === 'set_ui_appearance_settings') {
         return null;
@@ -228,6 +237,53 @@ describe('App bookmark management', () => {
     }
   });
 
+  it('浏览器定时同步在上一次未完成时不应重入', async () => {
+    vi.useFakeTimers();
+    try {
+      let importCallCount = 0;
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === 'get_folders') return Promise.resolve([]);
+        if (cmd === 'get_tags') return Promise.resolve([]);
+        if (cmd === 'get_bookmarks') return Promise.resolve([]);
+        if (cmd === 'get_delete_sync_setting') return Promise.resolve(false);
+        if (cmd === 'get_browser_auto_sync_settings') {
+          return Promise.resolve({ startup_enabled: false, interval_enabled: true, interval_minutes: 1 });
+        }
+        if (cmd === 'get_git_sync_repo_dir') return Promise.resolve('');
+        if (cmd === 'get_event_auto_sync_settings') {
+          return Promise.resolve({
+            startup_pull_enabled: false,
+            interval_enabled: false,
+            interval_minutes: 5,
+            close_push_enabled: true,
+          });
+        }
+        if (cmd === 'get_ui_appearance_settings') {
+          return Promise.resolve({
+            theme_mode: 'system',
+            background_enabled: false,
+            background_image_data_url: null,
+            background_overlay_opacity: 45,
+          });
+        }
+        if (cmd === 'import_browser_bookmarks') {
+          importCallCount += 1;
+          return new Promise(() => {});
+        }
+        return Promise.resolve(null);
+      });
+
+      render(<App />);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+
+      expect(importCallCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('启动时应加载外观设置', async () => {
     render(<App />);
     await waitFor(() => {
@@ -307,5 +363,60 @@ describe('App bookmark management', () => {
         tagName: '待阅读',
       });
     });
+  });
+
+  it('双击书签标题应使用默认浏览器打开', async () => {
+    render(<App />);
+    const title = await screen.findByText('示例');
+    fireEvent.doubleClick(title);
+    await waitFor(() => {
+      expect(openUrlMock).toHaveBeenCalledWith('https://example.com');
+    });
+  });
+
+  it('添加已存在网址时应提示并且不再调用 add_bookmark', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_folders') return [];
+      if (cmd === 'get_tags') return [];
+      if (cmd === 'get_bookmarks') return [];
+      if (cmd === 'get_delete_sync_setting') return false;
+      if (cmd === 'get_browser_auto_sync_settings') {
+        return { startup_enabled: false, interval_enabled: false, interval_minutes: 5 };
+      }
+      if (cmd === 'get_git_sync_repo_dir') return '';
+      if (cmd === 'get_event_auto_sync_settings') {
+        return {
+          startup_pull_enabled: false,
+          interval_enabled: false,
+          interval_minutes: 5,
+          close_push_enabled: true,
+        };
+      }
+      if (cmd === 'get_ui_appearance_settings') {
+        return {
+          theme_mode: 'system',
+          background_enabled: false,
+          background_image_data_url: null,
+          background_overlay_opacity: 45,
+        };
+      }
+      if (cmd === 'check_bookmark_exists') {
+        return { exists: true, title: '示例' };
+      }
+      return null;
+    });
+
+    render(<App />);
+    const input = await screen.findByPlaceholderText('粘贴 URL 快速添加书签...');
+    fireEvent.change(input, { target: { value: 'https://example.com' } });
+    const addBtn = screen.getByRole('button', { name: '添加' });
+    fireEvent.click(addBtn);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('check_bookmark_exists', { url: 'https://example.com' });
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith('add_bookmark', expect.anything());
+    expect(alertSpy).toHaveBeenCalledWith('该网址已存在：示例');
   });
 });

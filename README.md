@@ -17,12 +17,13 @@
 
 ## 项目结构
 
-- `bookmark-sync-app/`：桌面应用（React + TS + Tauri Rust）
+- `src/`：React + TypeScript 前端
+- `src-tauri/`：Tauri Rust 后端
 - `docs/`：需求、技术设计、开发计划、AI 变更记录
 
 ## 本地开发
 
-在 `bookmark-sync-app/` 下执行：
+在仓库根目录执行：
 
 ```bash
 npm install
@@ -43,7 +44,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 macOS 打包后产物路径：
 
-`bookmark-sync-app/src-tauri/target/release/bundle/macos/拾页.app`
+`src-tauri/target/release/bundle/macos/拾页.app`
 
 ## macOS 安装提示
 

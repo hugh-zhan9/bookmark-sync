@@ -5,9 +5,9 @@ pub mod sync;
 use std::sync::Mutex;
 use std::thread;
 use std::io::{Write, BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs::{self, File};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use events::models::{BookmarkPayload, SyncEvent, EventLog};
 use events::replay_events;
 use events::cleaner;
@@ -54,17 +54,18 @@ fn set_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Result<()
     Ok(())
 }
 
-fn with_sync_guard<T, F>(state: State<'_, DbState>, action: F) -> Result<T, String>
-where
-    F: FnOnce(&mut rusqlite::Connection) -> Result<T, String>,
-{
-    let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
-    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
-    action(&mut conn)
-}
-
 fn mark_pending_push(conn: &rusqlite::Connection, pending: bool) -> Result<(), String> {
     set_setting(conn, "event_sync_pending_push", if pending { "1" } else { "0" })
+}
+
+fn local_events_path_from_conn(conn: &rusqlite::Connection) -> Result<PathBuf, String> {
+    let db_path = conn
+        .path()
+        .ok_or_else(|| "无法定位数据库路径".to_string())?;
+    let app_dir = Path::new(db_path)
+        .parent()
+        .ok_or_else(|| "无法定位应用目录".to_string())?;
+    Ok(app_dir.join("events.ndjson"))
 }
 
 fn tokenize_search_query(query: &str) -> Vec<String> {
@@ -98,11 +99,57 @@ fn resolve_bookmark_id_for_url(
     .unwrap_or_else(|_| fallback_id.to_string())
 }
 
+fn is_bookmark_logically_deleted_by_canonical_url(
+    conn: &rusqlite::Connection,
+    canonical_url: &str,
+) -> Result<bool, String> {
+    let status: Option<i64> = conn
+        .query_row(
+            "SELECT is_deleted FROM bookmarks WHERE canonical_url = ?1 LIMIT 1",
+            params![canonical_url],
+            |r| r.get(0),
+        )
+        .ok();
+    Ok(status.unwrap_or(0) == 1)
+}
+
+fn is_folder_logically_deleted_by_id(
+    conn: &rusqlite::Connection,
+    folder_id: &str,
+) -> Result<bool, String> {
+    let status: Option<i64> = conn
+        .query_row(
+            "SELECT is_deleted FROM folders WHERE id = ?1 LIMIT 1",
+            params![folder_id],
+            |r| r.get(0),
+        )
+        .ok();
+    Ok(status.unwrap_or(0) == 1)
+}
+
+fn apply_metadata_by_canonical_url(
+    conn: &rusqlite::Connection,
+    canonical_url: &str,
+    meta: &metadata::SiteMetadata,
+) -> Result<usize, String> {
+    conn.execute(
+        "UPDATE bookmarks SET title = ?1, favicon_url = ?2, updated_at = CURRENT_TIMESTAMP WHERE canonical_url = ?3",
+        params![meta.title, meta.favicon_url, canonical_url],
+    )
+    .map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct FolderNode { id: String, parent_id: Option<String>, name: String }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct TagNode { id: String, name: String }
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct BookmarkExistsResult {
+    exists: bool,
+    title: Option<String>,
+}
 
 fn map_bookmark_row(row: &rusqlite::Row) -> rusqlite::Result<BookmarkPayload> {
     let tag_str: Option<String> = row.get(7)?;
@@ -112,6 +159,32 @@ fn map_bookmark_row(row: &rusqlite::Row) -> rusqlite::Result<BookmarkPayload> {
         id: row.get(0)?, url: row.get(1)?, title: row.get(2)?, description: row.get(3)?,
         favicon_url: row.get(4)?, host: row.get(5)?, created_at: row.get(6)?, tags,
     })
+}
+
+#[tauri::command]
+fn check_bookmark_exists(state: State<'_, DbState>, url: String) -> Result<BookmarkExistsResult, String> {
+    let cleaned = cleaner::clean_url(&url);
+    if cleaned.is_empty() {
+        return Ok(BookmarkExistsResult {
+            exists: false,
+            title: None,
+        });
+    }
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let row: Option<(Option<String>,)> = conn
+        .query_row(
+            "SELECT title FROM bookmarks WHERE canonical_url = ?1 AND is_deleted = 0 LIMIT 1",
+            params![cleaned],
+            |r| Ok((r.get(0)?,)),
+        )
+        .ok();
+    match row {
+        Some((title,)) => Ok(BookmarkExistsResult { exists: true, title }),
+        None => Ok(BookmarkExistsResult {
+            exists: false,
+            title: None,
+        }),
+    }
 }
 
 const BOOKMARK_SELECT_SQL: &str = "
@@ -168,8 +241,16 @@ fn search_bookmarks(state: State<'_, DbState>, query: String) -> Result<Vec<Book
 
 #[cfg(test)]
 mod tests {
-    use super::{tokenize_search_query, search_clause_for_param, resolve_bookmark_id_for_url};
+    use super::{
+        tokenize_search_query,
+        search_clause_for_param,
+        resolve_bookmark_id_for_url,
+        apply_metadata_by_canonical_url,
+        is_bookmark_logically_deleted_by_canonical_url,
+        is_folder_logically_deleted_by_id,
+    };
     use rusqlite::{Connection, params};
+    use crate::events::metadata::SiteMetadata;
 
     #[test]
     fn tokenize_search_query_should_split_by_whitespace_and_dedup() {
@@ -208,12 +289,100 @@ mod tests {
         let resolved = resolve_bookmark_id_for_url(&conn, "https://juejin.cn/post/1", "new-import-id");
         assert_eq!(resolved, "existing-id");
     }
+
+    #[test]
+    fn apply_metadata_should_update_row_by_canonical_url() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        conn.execute_batch(
+            "
+            CREATE TABLE bookmarks (
+              id TEXT PRIMARY KEY,
+              url TEXT NOT NULL,
+              canonical_url TEXT UNIQUE NOT NULL,
+              title TEXT,
+              favicon_url TEXT,
+              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            ",
+        )
+        .expect("create table");
+        conn.execute(
+            "INSERT INTO bookmarks (id, url, canonical_url, title) VALUES (?1, ?2, ?3, ?4)",
+            params!["existing-id", "https://juejin.cn/post/1?utm_source=x", "https://juejin.cn/post/1", "Loading..."],
+        )
+        .expect("seed bookmark");
+        let meta = SiteMetadata {
+            title: Some("Juejin Title".to_string()),
+            favicon_url: Some("https://juejin.cn/favicon.ico".to_string()),
+        };
+
+        let updated = apply_metadata_by_canonical_url(&conn, "https://juejin.cn/post/1", &meta).expect("apply metadata");
+        assert_eq!(updated, 1);
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM bookmarks WHERE canonical_url = ?1",
+                params!["https://juejin.cn/post/1"],
+                |r| r.get(0),
+            )
+            .expect("query title");
+        assert_eq!(title, "Juejin Title");
+    }
+
+    #[test]
+    fn import_should_skip_logically_deleted_bookmark() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        conn.execute_batch(
+            "
+            CREATE TABLE bookmarks (
+              id TEXT PRIMARY KEY,
+              canonical_url TEXT UNIQUE NOT NULL,
+              is_deleted BOOLEAN DEFAULT 0
+            );
+            ",
+        )
+        .expect("create table");
+        conn.execute(
+            "INSERT INTO bookmarks (id, canonical_url, is_deleted) VALUES (?1, ?2, 1)",
+            params!["b1", "https://example.com/a"],
+        )
+        .expect("seed bookmark");
+
+        let skipped = is_bookmark_logically_deleted_by_canonical_url(&conn, "https://example.com/a")
+            .expect("query bookmark deleted");
+        assert!(skipped);
+    }
+
+    #[test]
+    fn import_should_skip_logically_deleted_folder() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        conn.execute_batch(
+            "
+            CREATE TABLE folders (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              is_deleted BOOLEAN DEFAULT 0
+            );
+            ",
+        )
+        .expect("create table");
+        conn.execute(
+            "INSERT INTO folders (id, name, is_deleted) VALUES (?1, ?2, 1)",
+            params!["chrome-123", "工作"],
+        )
+        .expect("seed folder");
+
+        let skipped = is_folder_logically_deleted_by_id(&conn, "chrome-123")
+            .expect("query folder deleted");
+        assert!(skipped);
+    }
 }
 
 #[tauri::command]
 fn get_folders(state: State<'_, DbState>) -> Result<Vec<FolderNode>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT id, parent_id, name FROM folders ORDER BY name ASC").map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, parent_id, name FROM folders WHERE is_deleted = 0 ORDER BY name ASC")
+        .map_err(|e| e.to_string())?;
     let iter = stmt.query_map([], |row| Ok(FolderNode { id: row.get(0)?, parent_id: row.get(1)?, name: row.get(2)? })).map_err(|e| e.to_string())?;
     let mut res = Vec::new();
     for f in iter { if let Ok(x) = f { res.push(x); } }
@@ -307,7 +476,7 @@ fn remove_tag_from_bookmark(state: State<'_, DbState>, bookmark_id: String, tag_
 fn delete_folder(state: State<'_, DbState>, id: String) -> Result<(), String> {
     let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
     let before_folder_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM folders WHERE id = ?1", params![id.clone()], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM folders WHERE id = ?1 AND is_deleted = 0", params![id.clone()], |r| r.get(0))
         .map_err(|e| e.to_string())?;
     let before_link_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM folder_bookmarks WHERE folder_id = ?1", params![id.clone()], |r| r.get(0))
@@ -335,17 +504,14 @@ fn delete_folder(state: State<'_, DbState>, id: String) -> Result<(), String> {
     }
     append_debug_log(&conn, &format!("delete_folder replay_events ok id={}", id));
 
-    let fallback_deleted = conn
-        .execute("DELETE FROM folders WHERE id = ?1", params![id.clone()])
-        .map_err(|e| e.to_string())?;
     let after_folder_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM folders WHERE id = ?1", params![id.clone()], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM folders WHERE id = ?1 AND is_deleted = 0", params![id.clone()], |r| r.get(0))
         .map_err(|e| e.to_string())?;
     append_debug_log(
         &conn,
         &format!(
-            "delete_folder end id={} fallback_deleted={} after_folders={}",
-            id, fallback_deleted, after_folder_count
+            "delete_folder end id={} after_visible_folders={}",
+            id, after_folder_count
         ),
     );
     if after_folder_count > 0 {
@@ -399,20 +565,24 @@ fn write_debug_log(state: State<'_, DbState>, message: String) -> Result<(), Str
 }
 
 #[tauri::command]
-fn add_bookmark(state: State<'_, DbState>, mut payload: BookmarkPayload) -> Result<(), String> {
+fn add_bookmark(state: State<'_, DbState>, app_handle: tauri::AppHandle, mut payload: BookmarkPayload) -> Result<(), String> {
     let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
     payload.url = cleaner::clean_url(&payload.url);
-    let bm_id = payload.id.clone();
+    let canonical_url_to_update = payload.url.clone();
     let url_to_fetch = payload.url.clone();
     let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: "local".into(), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::BookmarkAdded(payload) };
     replay_events(&mut conn, vec![event]).map_err(|e| e.to_string())?;
     
     let path = conn.path().map(|p| p.to_string());
+    let app_handle = app_handle.clone();
     if let Some(p) = path {
         thread::spawn(move || {
             if let Ok(meta) = metadata::fetch_metadata(&url_to_fetch) {
                 if let Ok(c) = rusqlite::Connection::open(p) {
-                    let _ = c.execute("UPDATE bookmarks SET title = ?1, favicon_url = ?2 WHERE id = ?3", params![meta.title, meta.favicon_url, bm_id]);
+                    let updated = apply_metadata_by_canonical_url(&c, &canonical_url_to_update, &meta).unwrap_or(0);
+                    if updated > 0 {
+                        let _ = app_handle.emit("bookmarks-updated", ());
+                    }
                 }
             }
         });
@@ -461,11 +631,17 @@ fn import_browser_bookmarks(state: State<'_, DbState>) -> Result<usize, String> 
         let stable_id = format!("{}-{}", n.browser.to_lowercase(), n.original_id);
         let stable_parent_id = n.parent_original_id.map(|pid| format!("{}-{}", n.browser.to_lowercase(), pid));
         if n.is_folder {
+            if is_folder_logically_deleted_by_id(&conn, &stable_id)? {
+                continue;
+            }
             let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: format!("{}_import", n.browser), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::FolderAdded { id: stable_id, parent_id: stable_parent_id, name: n.title } };
             let _ = replay_events(&mut conn, vec![event]);
         } else {
             let url = cleaner::clean_url(&n.url.unwrap_or_default());
             if url.is_empty() { continue; }
+            if is_bookmark_logically_deleted_by_canonical_url(&conn, &url)? {
+                continue;
+            }
             let payload = BookmarkPayload { id: stable_id.clone(), url: url.clone(), title: Some(n.title), description: None, favicon_url: None, host: url::Url::parse(&url).ok().and_then(|u| u.host_str().map(|h| h.to_string())), created_at: chrono::Utc::now().to_rfc3339(), tags: None };
             let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: format!("{}_import", n.browser), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::BookmarkAdded(payload) };
             if replay_events(&mut conn, vec![event]).is_ok() {
@@ -544,20 +720,39 @@ fn set_git_sync_repo_dir(state: State<'_, DbState>, repo_dir: String) -> Result<
 
 #[tauri::command]
 fn sync_github_incremental(state: State<'_, DbState>) -> Result<(), String> {
-    with_sync_guard(state, |conn| {
-        let repo_dir = get_setting(conn, "git_sync_repo_dir").ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
-        if !sync::is_git_repo_dir(&repo_dir) {
-            return Err("Git 仓库目录无效".to_string());
+    let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
+    let (repo_dir, local_events_path) = {
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        let repo_dir = get_setting(&conn, "git_sync_repo_dir")
+            .ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
+        let local_events_path = local_events_path_from_conn(&conn)?;
+        (repo_dir, local_events_path)
+    };
+    if !sync::is_git_repo_dir(&repo_dir) {
+        return Err("Git 仓库目录无效".to_string());
+    }
+
+    sync::git_pull_current_branch(&repo_dir)?;
+    {
+        let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+        sync_events_from_repo(&mut conn, &repo_dir)?;
+    }
+
+    match sync_events_to_repo(&repo_dir, &local_events_path) {
+        Ok(_) => {
+            let conn = state.conn.lock().map_err(|e| e.to_string())?;
+            mark_pending_push(&conn, false)?;
+            Ok(())
         }
-        sync_events_from_repo(conn, &repo_dir)?;
-        sync_events_to_repo(conn, &repo_dir)?;
-        mark_pending_push(conn, false)?;
-        Ok(())
-    })
+        Err(e) => {
+            let conn = state.conn.lock().map_err(|e| e.to_string())?;
+            let _ = mark_pending_push(&conn, true);
+            Err(e)
+        }
+    }
 }
 
 fn sync_events_from_repo(conn: &mut rusqlite::Connection, repo_dir: &str) -> Result<(), String> {
-    sync::git_pull_current_branch(repo_dir)?;
     let events_dir = sync::ensure_events_dir(repo_dir)?;
     let repo_events_path = events_dir.join("events.ndjson");
     if !repo_events_path.exists() {
@@ -578,16 +773,13 @@ fn sync_events_from_repo(conn: &mut rusqlite::Connection, repo_dir: &str) -> Res
     Ok(())
 }
 
-fn sync_events_to_repo(conn: &rusqlite::Connection, repo_dir: &str) -> Result<(), String> {
+fn sync_events_to_repo(repo_dir: &str, local_events_path: &Path) -> Result<(), String> {
     let events_dir = sync::ensure_events_dir(repo_dir)?;
     let repo_events_path = events_dir.join("events.ndjson");
-    let db_path = conn.path().ok_or_else(|| "无法定位数据库路径".to_string())?;
-    let app_dir = Path::new(db_path).parent().ok_or_else(|| "无法定位应用目录".to_string())?;
-    let local_events_path = app_dir.join("events.ndjson");
     if !local_events_path.exists() {
-        File::create(&local_events_path).map_err(|e| e.to_string())?;
+        File::create(local_events_path).map_err(|e| e.to_string())?;
     }
-    fs::copy(&local_events_path, &repo_events_path).map_err(|e| e.to_string())?;
+    fs::copy(local_events_path, &repo_events_path).map_err(|e| e.to_string())?;
     sync::git_add_commit_push_current_branch(
         repo_dir,
         "events/events.ndjson",
@@ -655,41 +847,68 @@ fn set_event_auto_sync_settings(
 
 #[tauri::command]
 fn sync_event_pull_only(state: State<'_, DbState>) -> Result<(), String> {
-    with_sync_guard(state, |conn| {
-        let repo_dir = get_setting(conn, "git_sync_repo_dir").ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
-        if !sync::is_git_repo_dir(&repo_dir) {
-            return Err("Git 仓库目录无效".to_string());
-        }
-        sync_events_from_repo(conn, &repo_dir)?;
-        let pending_push = get_setting(conn, "event_sync_pending_push")
+    let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
+    let (repo_dir, pending_push, local_events_path) = {
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        let repo_dir = get_setting(&conn, "git_sync_repo_dir")
+            .ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
+        let pending_push = get_setting(&conn, "event_sync_pending_push")
             .map(|v| v == "1")
             .unwrap_or(false);
-        if pending_push {
-            sync_events_to_repo(conn, &repo_dir)?;
-            mark_pending_push(conn, false)?;
+        let local_events_path = local_events_path_from_conn(&conn)?;
+        (repo_dir, pending_push, local_events_path)
+    };
+    if !sync::is_git_repo_dir(&repo_dir) {
+        return Err("Git 仓库目录无效".to_string());
+    }
+
+    sync::git_pull_current_branch(&repo_dir)?;
+    {
+        let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+        sync_events_from_repo(&mut conn, &repo_dir)?;
+    }
+
+    if pending_push {
+        match sync_events_to_repo(&repo_dir, &local_events_path) {
+            Ok(_) => {
+                let conn = state.conn.lock().map_err(|e| e.to_string())?;
+                mark_pending_push(&conn, false)?;
+            }
+            Err(e) => {
+                let conn = state.conn.lock().map_err(|e| e.to_string())?;
+                let _ = mark_pending_push(&conn, true);
+                return Err(e);
+            }
         }
-        Ok(())
-    })
+    }
+    Ok(())
 }
 
 #[tauri::command]
 fn sync_event_push_only(state: State<'_, DbState>) -> Result<(), String> {
-    with_sync_guard(state, |conn| {
-        let repo_dir = get_setting(conn, "git_sync_repo_dir").ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
-        if !sync::is_git_repo_dir(&repo_dir) {
-            return Err("Git 仓库目录无效".to_string());
+    let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
+    let (repo_dir, local_events_path) = {
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        let repo_dir = get_setting(&conn, "git_sync_repo_dir")
+            .ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
+        let local_events_path = local_events_path_from_conn(&conn)?;
+        (repo_dir, local_events_path)
+    };
+    if !sync::is_git_repo_dir(&repo_dir) {
+        return Err("Git 仓库目录无效".to_string());
+    }
+    match sync_events_to_repo(&repo_dir, &local_events_path) {
+        Ok(_) => {
+            let conn = state.conn.lock().map_err(|e| e.to_string())?;
+            mark_pending_push(&conn, false)?;
+            Ok(())
         }
-        match sync_events_to_repo(conn, &repo_dir) {
-            Ok(_) => {
-                mark_pending_push(conn, false)?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = mark_pending_push(conn, true);
-                Err(e)
-            }
+        Err(e) => {
+            let conn = state.conn.lock().map_err(|e| e.to_string())?;
+            let _ = mark_pending_push(&conn, true);
+            Err(e)
         }
-    })
+    }
 }
 
 #[tauri::command]
@@ -767,22 +986,32 @@ pub fn run() {
                 let state = window.state::<DbState>();
                 let sync_lock_result = state.sync_lock.lock();
                 if let Ok(sync_guard) = sync_lock_result {
-                    if let Ok(conn) = state.conn.lock() {
+                    let context = if let Ok(conn) = state.conn.lock() {
                         let close_push_enabled = get_setting(&conn, "event_sync_close_push")
                             .map(|v| v == "1")
                             .unwrap_or(true);
                         if close_push_enabled {
-                            if let Some(repo_dir) = get_setting(&conn, "git_sync_repo_dir") {
-                                if sync::is_git_repo_dir(&repo_dir) {
-                                    match sync_events_to_repo(&conn, &repo_dir) {
-                                        Ok(_) => {
-                                            let _ = mark_pending_push(&conn, false);
-                                            append_debug_log(&conn, "close push success");
-                                        }
-                                        Err(err) => {
-                                            let _ = mark_pending_push(&conn, true);
-                                            append_debug_log(&conn, &format!("close push failed: {err}"));
-                                        }
+                            get_setting(&conn, "git_sync_repo_dir")
+                                .map(|repo_dir| (repo_dir, local_events_path_from_conn(&conn)))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some((repo_dir, Ok(local_events_path))) = context {
+                        if sync::is_git_repo_dir(&repo_dir) {
+                            let push_result = sync_events_to_repo(&repo_dir, &local_events_path);
+                            if let Ok(conn) = state.conn.lock() {
+                                match push_result {
+                                    Ok(_) => {
+                                        let _ = mark_pending_push(&conn, false);
+                                        append_debug_log(&conn, "close push success");
+                                    }
+                                    Err(err) => {
+                                        let _ = mark_pending_push(&conn, true);
+                                        append_debug_log(&conn, &format!("close push failed: {err}"));
                                     }
                                 }
                             }
@@ -794,6 +1023,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_bookmarks, add_bookmark, search_bookmarks,
+            check_bookmark_exists,
             import_browser_bookmarks, get_folders, get_bookmarks_by_folder,
             update_bookmark, delete_bookmark, create_folder, delete_folder,
             rename_folder, add_bookmark_to_folder, remove_bookmark_from_folder, get_bookmark_folders,

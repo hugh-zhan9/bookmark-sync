@@ -33,7 +33,7 @@ pub fn apply_event(conn: &mut Connection, log: &EventLog) -> Result<(), String> 
         SyncEvent::FolderAdded { id, parent_id, name } => {
             conn.execute(
                 "INSERT INTO folders (id, parent_id, name) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+                 ON CONFLICT(id) DO UPDATE SET name = excluded.name, parent_id = excluded.parent_id",
                 params![id, parent_id, name]
             ).map_err(|e| e.to_string())?;
         },
@@ -75,7 +75,7 @@ pub fn apply_event(conn: &mut Connection, log: &EventLog) -> Result<(), String> 
         },
         SyncEvent::FolderDeleted { id } => {
             conn.execute(
-                "DELETE FROM folders WHERE id = ?1",
+                "UPDATE folders SET is_deleted = 1 WHERE id = ?1",
                 params![id]
             ).map_err(|e| e.to_string())?;
         },
@@ -150,6 +150,7 @@ fn create_tables(conn: &Connection) -> Result<()> {
             id TEXT PRIMARY KEY,
             parent_id TEXT,
             name TEXT NOT NULL,
+            is_deleted BOOLEAN DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (parent_id) REFERENCES folders(id) ON DELETE CASCADE
         );
@@ -201,6 +202,27 @@ fn create_tables(conn: &Connection) -> Result<()> {
         END;
         "
     )?;
+    ensure_folders_is_deleted_column(conn)?;
+    Ok(())
+}
+
+fn ensure_folders_is_deleted_column(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(folders)")?;
+    let mut rows = stmt.query([])?;
+    let mut has_is_deleted = false;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == "is_deleted" {
+            has_is_deleted = true;
+            break;
+        }
+    }
+    if !has_is_deleted {
+        conn.execute(
+            "ALTER TABLE folders ADD COLUMN is_deleted BOOLEAN DEFAULT 0",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -267,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn folder_deleted_event_should_remove_folder() {
+    fn folder_deleted_event_should_mark_folder_deleted() {
         let mut conn = setup_conn();
         conn.execute(
             "INSERT INTO folders (id, parent_id, name) VALUES (?1, ?2, ?3)",
@@ -284,13 +306,13 @@ mod tests {
 
         apply_event(&mut conn, &deleted_event).expect("apply folder deleted");
 
-        let count: i64 = conn
+        let deleted: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM folders WHERE id = ?1",
+                "SELECT is_deleted FROM folders WHERE id = ?1",
                 params!["f1"],
                 |r| r.get(0),
             )
-            .expect("count folders");
-        assert_eq!(count, 0);
+            .expect("query folder is_deleted");
+        assert_eq!(deleted, 1);
     }
 }

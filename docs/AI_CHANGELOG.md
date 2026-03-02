@@ -717,3 +717,54 @@
 - `bookmark-sync-app/src/App.tsx`
 - `bookmark-sync-app/src/App.test.tsx`
 ----------------------------------------
+## [2026-03-02 19:08] [Bugfix]
+- **Change**: 修复新增书签标题长期停留 Loading 的问题：metadata 回写改为按 canonical_url 更新并在回写后主动发出 bookmarks-updated 刷新事件
+- **Risk Analysis**: 风险较低，主要影响新增书签后的异步标题回写链路；已新增 Rust 单测覆盖 canonical_url 回写并通过前后端测试与构建。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+----------------------------------------
+## [2026-03-02 19:11] [Bugfix]
+- **Change**: 支持双击书签标题使用系统默认浏览器打开，并修复新增书签 metadata 回写后前端自动刷新
+- **Risk Analysis**: 风险低，主要影响书签标题交互行为（单击不再打开，改为双击打开）；已新增双击测试并通过全量前后端测试与构建。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+- `bookmark-sync-app/src/App.realtime.test.tsx`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+----------------------------------------
+## [2026-03-02 19:19] [Bugfix]
+- **Change**: 导入流程跳过逻辑删除书签/文件夹并将文件夹删除改为逻辑删除
+- **Risk Analysis**: 中等风险：folders 新增 is_deleted 兼容列并修改删除语义，若旧数据依赖物理删除可能出现历史关联残留；已通过 Rust/Vitest/构建回归，仍需实机验证浏览器导入与文件夹展示一致性。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src-tauri/src/db/mod.rs`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 19:30] [Refactor]
+- **Change**: 拆分事件同步锁粒度并增加浏览器导入防重入，缓解应用卡住问题
+- **Risk Analysis**: 中高风险：同步链路改为短时持有数据库锁，降低阻塞但涉及启动/定时/关闭时序；已通过 Rust/Vitest/构建验证，仍需实机观察弱网与Git冲突场景。
+- **Risk Level**: S1（高级: 关键流程失败、主要功能不可用或明显业务回归）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 19:41] [Refactor]
+- **Change**: 目录扁平化到仓库根目录并新增重复网址添加提示
+- **Risk Analysis**: 中等风险：目录迁移影响脚本路径与CI发布路径，已同步修复并通过构建/测试；重复网址提示依赖新增查询命令，若URL清洗规则变化可能出现误判。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src/App.tsx`
+- `src/App.test.tsx`
+- `src-tauri/src/lib.rs`
+- `README.md`
+- `AGENTS.md`
+- `GEMINI.md`
+- `docs/technical-design.md`
+- `.github/workflows/release.yml`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------

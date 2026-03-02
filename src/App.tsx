@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 interface Bookmark {
@@ -28,6 +29,10 @@ interface UiAppearanceSettings {
   background_enabled: boolean;
   background_image_data_url: string | null;
   background_overlay_opacity: number;
+}
+interface BookmarkExistsResult {
+  exists: boolean;
+  title?: string | null;
 }
 
 function App() {
@@ -64,6 +69,7 @@ function App() {
   const [eventSyncIntervalMinutes, setEventSyncIntervalMinutes] = useState(5);
   const [eventSyncClosePushEnabled, setEventSyncClosePushEnabled] = useState(true);
   const eventSyncInFlightRef = useRef(false);
+  const browserImportInFlightRef = useRef(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("dark");
   const [backgroundEnabled, setBackgroundEnabled] = useState(false);
@@ -173,6 +179,11 @@ function App() {
     if (!newUrl) return;
     setLoading(true);
     try {
+      const exists = await invoke<BookmarkExistsResult>("check_bookmark_exists", { url: newUrl });
+      if (exists.exists) {
+        alert(`该网址已存在：${exists.title || newUrl}`);
+        return;
+      }
       const payload = { id: crypto.randomUUID(), url: newUrl, title: "Loading...", host: new URL(newUrl).hostname, created_at: new Date().toISOString(), tags: [] };
       await invoke("add_bookmark", { payload });
       setNewUrl("");
@@ -270,7 +281,20 @@ function App() {
     try { await invoke("add_tag_to_bookmark", { bookmarkId: addingTagToId, tagName }); setAddingTagToId(null); setNewTagText(""); refreshData(); } catch (e) { alert(e); }
   }
 
+  async function openBookmarkInDefaultBrowser(url: string) {
+    try {
+      await openUrl(url);
+    } catch (e) {
+      console.error(e);
+      alert(`打开链接失败：${String(e)}`);
+    }
+  }
+
   async function importBrowserBookmarks(showAlert: boolean) {
+    if (browserImportInFlightRef.current) {
+      return;
+    }
+    browserImportInFlightRef.current = true;
     setImporting(true);
     try {
       const count = await invoke<number>("import_browser_bookmarks");
@@ -284,7 +308,10 @@ function App() {
       } else {
         console.error(e);
       }
-    } finally { setImporting(false); }
+    } finally {
+      setImporting(false);
+      browserImportInFlightRef.current = false;
+    }
   }
 
   async function handleImport() {
@@ -316,7 +343,7 @@ function App() {
       setGitRepoDir(repoDir);
 
       if (settings.startup_enabled) {
-        importBrowserBookmarks(false);
+        await importBrowserBookmarks(false);
       }
 
       const eventSettings = await invoke<EventAutoSyncSettings>("get_event_auto_sync_settings");
@@ -605,7 +632,12 @@ function App() {
                     {bm.favicon_url ? <img src={bm.favicon_url} className="w-4 h-4 object-contain" alt="" /> : <span className="text-sm font-bold text-neutral-800 uppercase">{bm.host?.charAt(0) || "?"}</span>}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="bookmark-title font-semibold truncate mb-0.5 transition-colors cursor-pointer text-sm" onClick={() => window.open(bm.url, "_blank")}>{bm.title || bm.url}</h3>
+                    <h3
+                      className="bookmark-title font-semibold truncate mb-0.5 transition-colors cursor-pointer text-sm"
+                      onDoubleClick={() => openBookmarkInDefaultBrowser(bm.url)}
+                    >
+                      {bm.title || bm.url}
+                    </h3>
                     <p className="text-[11px] text-neutral-600 truncate font-medium mb-1">{bm.host}</p>
                     <div className="flex flex-wrap gap-1">
                       {bm.tags?.map(t => <span key={t} className="token-chip">#{t}</span>)}

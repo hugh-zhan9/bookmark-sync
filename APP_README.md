@@ -1,4 +1,4 @@
-# Bookmark Sync App
+# Bookmark Sync App（历史文档）
 
 桌面端应用（Tauri + React + TypeScript + Rust）。
 
@@ -25,5 +25,4 @@ npm run tauri build -- --bundles app
 ```
 
 产物：
-
 `src-tauri/target/release/bundle/macos/拾页.app`
