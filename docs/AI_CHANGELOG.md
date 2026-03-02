@@ -82,3 +82,10 @@
 - `browser-extension/manifest.json`
 - `browser-extension/icons/`
 ----------------------------------------
+## [2026-03-02 11:47] [Feature]
+- **Change**: 响应用户需求，将应用名 bookmarks-sync-app 正式变更为中文定名：拾页。
+- **Risk Analysis**: 无风险；修改了工程名
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/tauri.conf.json`
+----------------------------------------
