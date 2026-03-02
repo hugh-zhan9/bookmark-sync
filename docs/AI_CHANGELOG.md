@@ -15,3 +15,10 @@
 - **Changed Files**:
 - `README.md`
 ----------------------------------------
+## [2026-03-02 11:16] [Bugfix]
+- **Change**: 修复 Github Actions 打包报错，将 Node.js 版本要求从 18 提升至 22 以适配 Vite 引擎与 TailwindCSS。
+- **Risk Analysis**: 低级风险；仅调整云端 CI/CD 工作流配置文件
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `.github/workflows/release.yml`
+----------------------------------------
