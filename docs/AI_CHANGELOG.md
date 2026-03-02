@@ -391,3 +391,89 @@
 - `browser-extension/native-host/package-lock.json`
 - `browser-extension/native-host/package.json`
 ----------------------------------------
+## [2026-03-02 13:59] [Bugfix]
+- **Change**: 修复桌面端首次加载依赖输入框触发的问题：App 启动后立即执行一次全量书签查询，避免必须输入字符再清空才能刷新。并补充前端单测覆盖该行为。
+- **Risk Analysis**: 低到中风险：新增启动即查询会增加一次 invoke 调用，但可显著提升可用性；测试框架引入仅影响开发依赖。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+- `bookmark-sync-app/package.json`
+- `bookmark-sync-app/package-lock.json`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 14:10] [Bugfix]
+- **Change**: 使用 PIL ImageChops 批量通道操作精准去除外圈纯黑边框，保留原 AI 生成的完整 squircle 图标，重新生成全平台图标资产。
+- **Risk Analysis**: 低风险；静态资产
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/app-icon.png`
+- `bookmark-sync-app/package-lock.json`
+- `bookmark-sync-app/package.json`
+- `bookmark-sync-app/src-tauri/icons/128x128.png`
+- `bookmark-sync-app/src-tauri/icons/128x128@2x.png`
+- `bookmark-sync-app/src-tauri/icons/32x32.png`
+- `bookmark-sync-app/src-tauri/icons/64x64.png`
+- `bookmark-sync-app/src-tauri/icons/Square107x107Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square142x142Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square150x150Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square284x284Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square30x30Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square310x310Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square44x44Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square71x71Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square89x89Logo.png`
+- `bookmark-sync-app/src-tauri/icons/StoreLogo.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-hdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-hdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-hdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-mdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-mdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-mdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xhdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/icon.icns`
+- `bookmark-sync-app/src-tauri/icons/icon.ico`
+- `bookmark-sync-app/src-tauri/icons/icon.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-20x20@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-20x20@2x-1.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-20x20@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-20x20@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@2x-1.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@2x-1.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-512@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-60x60@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-60x60@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-76x76@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-76x76@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-83.5x83.5@2x.png`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src/App.tsx`
+- `browser-extension/background.js`
+- `browser-extension/icons/128.png`
+- `browser-extension/icons/32.png`
+- `browser-extension/icons/64.png`
+- `browser-extension/manifest.json`
+- `browser-extension/native-host/db-writer.js`
+- `browser-extension/native-host/host.js`
+- `docs/AI_CHANGELOG.md`
+- `bookmark-sync-app/src-tauri/a31d5494-680e-4ae1-b160-d35e62185ec7.png`
+- `bookmark-sync-app/src/App.realtime.test.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+- `browser-extension/background-sync.js`
+- `browser-extension/background-sync.test.js`
+- `browser-extension/native-host/full-sync.test.js`
+----------------------------------------

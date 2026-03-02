@@ -5,7 +5,9 @@
     "description": "Local-first bookmark synchronizer client capturing browser events.",
     "permissions": [
         "bookmarks",
-        "nativeMessaging"
+        "nativeMessaging",
+        "tabs",
+        "activeTab"
     ],
     "background": {
         "service_worker": "background.js",

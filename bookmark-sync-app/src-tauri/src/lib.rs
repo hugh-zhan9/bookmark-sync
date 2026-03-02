@@ -5,6 +5,7 @@ pub mod sync;
 
 use std::sync::Mutex;
 use std::thread;
+use std::time::Duration;
 use tauri::{Manager, State, Emitter};
 use sync::{credentials, init_or_open_repo, commit_all};
 use events::models::{BookmarkPayload, SyncEvent, EventLog};
@@ -167,6 +168,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
+            let db_file = app_data_dir.join("bookmarks.db");
             let conn = db::init_db(app_data_dir).expect("Failed to initialize database");
             
             // Manage DbState globally 
@@ -191,6 +193,27 @@ pub fn run() {
                             eprintln!("NativeMsg Error: {}", e);
                             break;
                         }
+                    }
+                }
+            });
+
+            // Watch local SQLite changes so frontend can refresh immediately.
+            let watch_handle = app.handle().clone();
+            thread::spawn(move || {
+                let mut last_modified = std::fs::metadata(&db_file).and_then(|m| m.modified()).ok();
+                loop {
+                    thread::sleep(Duration::from_millis(500));
+                    let current = match std::fs::metadata(&db_file).and_then(|m| m.modified()) {
+                        Ok(ts) => ts,
+                        Err(_) => continue,
+                    };
+                    let changed = match last_modified {
+                        Some(prev) => current > prev,
+                        None => true,
+                    };
+                    if changed {
+                        last_modified = Some(current);
+                        let _ = watch_handle.emit("bookmarks-updated", "db-changed");
                     }
                 }
             });

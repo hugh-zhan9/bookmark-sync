@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "./App.css";
 
 interface Bookmark {
@@ -24,6 +25,10 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
+    fetchBookmarks("");
+  }, []);
+
+  useEffect(() => {
     const timer = setTimeout(() => {
       fetchBookmarks(searchQuery);
     }, 300);
@@ -31,10 +36,29 @@ function App() {
   }, [searchQuery]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    let unlisten: UnlistenFn | null = null;
+    let disposed = false;
+
+    listen("bookmarks-updated", () => {
       fetchBookmarks(searchQuery);
-    }, 3000);
-    return () => clearInterval(interval);
+    })
+      .then((fn) => {
+        if (disposed) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch((error) => {
+        console.error("Failed to subscribe bookmarks-updated:", error);
+      });
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
   }, [searchQuery]);
 
   async function fetchBookmarks(query = searchQuery) {

@@ -13,7 +13,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { getDbPath } = require('./db-path');
-const { upsertBookmarkAdded } = require('./db-writer');
+const { upsertBookmarkAdded, upsertBookmarksBatch } = require('./db-writer');
 
 // ---- 日志（写文件，避免污染 stdout）----
 const LOG_FILE = path.join(os.tmpdir(), 'shiiye-native-host.log');
@@ -72,6 +72,16 @@ function handleBookmarkEvent(msg) {
             const now = new Date().toISOString();
             upsertBookmarkAdded(db, { id, url, title, now });
             log('Inserted bookmark: ' + url);
+        } else if (type === 'PageCaptured') {
+            const { id, url, title } = payload;
+            const now = new Date().toISOString();
+            upsertBookmarkAdded(db, { id, url, title, now });
+            log('Captured page into bookmark: ' + url);
+        } else if (type === 'FullSync') {
+            const bookmarks = payload && Array.isArray(payload.bookmarks) ? payload.bookmarks : [];
+            const now = new Date().toISOString();
+            upsertBookmarksBatch(db, bookmarks, now);
+            log('FullSync upserted bookmarks: ' + bookmarks.length);
         } else if (type === 'BookmarkDeleted') {
             const { id, url } = payload;
             if (id) {
@@ -154,7 +164,7 @@ function startHost() {
 
     readMessage(function onMessage(msg) {
         handleBookmarkEvent(msg);
-        sendMessage({ status: 'ok' });
+        sendMessage({ status: 'ok', type: msg && msg.type ? msg.type : 'Unknown' });
     });
 }
 
