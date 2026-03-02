@@ -1,0 +1,9 @@
+{
+    "name": "com.bookmark.sync.client",
+    "description": "Bookmark Sync Client Native Host",
+    "path": "/usr/local/bin/bookmark-sync-native-host",
+    "type": "stdio",
+    "allowed_origins": [
+        "chrome-extension://YOUR_EXTENSION_ID_HERE/"
+    ]
+}
