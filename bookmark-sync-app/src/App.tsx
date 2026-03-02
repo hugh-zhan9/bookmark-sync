@@ -30,6 +30,13 @@ function App() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchBookmarks(searchQuery);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [searchQuery]);
+
   async function fetchBookmarks(query = searchQuery) {
     try {
       let data: Bookmark[] = [];

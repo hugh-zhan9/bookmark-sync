@@ -1,0 +1,9 @@
+{
+    "name": "bookmark-sync-native-host",
+    "version": "1.0.0",
+    "description": "拾页 Native Messaging Host - bridges Chrome bookmarks to local SQLite",
+    "main": "host.js",
+    "dependencies": {
+        "better-sqlite3": "^12.6.2"
+    }
+}

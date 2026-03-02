@@ -277,3 +277,117 @@
 - `browser-extension/icons/32.png`
 - `browser-extension/icons/64.png`
 ----------------------------------------
+## [2026-03-02 13:45] [Bugfix]
+- **Change**: 修复浏览器书签新增后未同步到桌面端的关键链路：Native Host 数据库路径优先匹配 Tauri identifier，并增强安装脚本的扩展 ID 注入；桌面前端增加定时刷新以展示外部写库结果。
+- **Risk Analysis**: 中等风险：涉及 Native Host 路径选择与安装流程，若用户未重新执行安装脚本或扩展 ID 仍不匹配，浏览器到宿主通信仍会失败；前端轮询会带来轻微查询频率上升。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `browser-extension/native-host/db-path.js`
+- `browser-extension/native-host/db-path.test.js`
+- `browser-extension/native-host/host.js`
+- `browser-extension/native-host/install_mac.sh`
+- `bookmark-sync-app/src/App.tsx`
+----------------------------------------
+## [2026-03-02 13:46] [Bugfix]
+- **Change**: 补充修正 Native Host 注释与回退队列路径，队列文件目录改为与当前选中的数据库目录一致，避免路径不一致导致排障困难。
+- **Risk Analysis**: 低风险：仅影响日志与回退队列路径，不改变主事件写库 SQL；若数据库目录不可写，仍会出现队列落盘失败。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `browser-extension/native-host/host.js`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 13:53] [Bugfix]
+- **Change**: 修复 Native Host 启动崩溃（日志初始化时序导致 TDZ 异常），并升级 better-sqlite3 到支持 Node 25 的版本，恢复浏览器事件写入本地 SQLite 的能力。
+- **Risk Analysis**: 中等风险：升级原生依赖后若目标机器缺少预编译二进制可能触发本地编译差异；但当前环境已安装成功并通过启动验证。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `browser-extension/native-host/host.js`
+- `browser-extension/native-host/host-init.test.js`
+- `browser-extension/native-host/package.json`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 13:55] [Bugfix]
+- **Change**: 修复 Native Host 对 BookmarkAdded 的写库策略：由 INSERT OR IGNORE 改为 URL 冲突时 upsert，确保已删除的同 URL 书签可被重新激活并更新标题/时间。
+- **Risk Analysis**: 中等风险：改动了冲突处理语义，若存在依赖旧行为的逻辑可能受影响；但已通过单元测试覆盖“删除后重加”关键场景。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `browser-extension/native-host/db-writer.js`
+- `browser-extension/native-host/db-writer.test.js`
+- `browser-extension/native-host/host.js`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 13:55] [Bugfix]
+- **Change**: 1. 图标：用圆角矩形遮罩取代阈值去背，彻底去除黑底和右上角白色玻璃高光残留。2. Native Messaging：新增独立 Node.js Native Host (host.js)，填入真实 Extension ID，去掉 sudo 改用用户级目录安装，Chrome 已成功注册。
+- **Risk Analysis**: 中级风险；涉及系统级 Native Messaging 宿主注册
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/app-icon.png`
+- `bookmark-sync-app/app-icon.svg`
+- `bookmark-sync-app/src-tauri/icons/128x128.png`
+- `bookmark-sync-app/src-tauri/icons/128x128@2x.png`
+- `bookmark-sync-app/src-tauri/icons/32x32.png`
+- `bookmark-sync-app/src-tauri/icons/64x64.png`
+- `bookmark-sync-app/src-tauri/icons/Square107x107Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square142x142Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square150x150Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square284x284Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square30x30Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square310x310Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square44x44Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square71x71Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square89x89Logo.png`
+- `bookmark-sync-app/src-tauri/icons/StoreLogo.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-hdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-hdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-hdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-mdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-mdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-mdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xhdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/icon.icns`
+- `bookmark-sync-app/src-tauri/icons/icon.ico`
+- `bookmark-sync-app/src-tauri/icons/icon.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-20x20@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-20x20@2x-1.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-20x20@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-20x20@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@2x-1.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@2x-1.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-512@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-60x60@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-60x60@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-76x76@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-76x76@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-83.5x83.5@2x.png`
+- `bookmark-sync-app/src/App.tsx`
+- `browser-extension/icons/128.png`
+- `browser-extension/icons/32.png`
+- `browser-extension/icons/64.png`
+- `browser-extension/native-host/install_mac.sh`
+- `browser-extension/native-host/manifest.json`
+- `docs/AI_CHANGELOG.md`
+- `docs/requirstment.md`
+- `browser-extension/native-host/db-path.js`
+- `browser-extension/native-host/db-path.test.js`
+- `browser-extension/native-host/db-writer.js`
+- `browser-extension/native-host/db-writer.test.js`
+- `browser-extension/native-host/host-init.test.js`
+- `browser-extension/native-host/host.js`
+- `browser-extension/native-host/node_modules/`
+- `browser-extension/native-host/package-lock.json`
+- `browser-extension/native-host/package.json`
+----------------------------------------
