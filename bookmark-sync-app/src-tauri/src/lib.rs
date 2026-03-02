@@ -2,164 +2,751 @@ pub mod db;
 pub mod events;
 pub mod sync;
 
-
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
-use tauri::{Manager, State, Emitter};
-use sync::{credentials, init_or_open_repo, commit_all};
+use std::io::{Write, BufRead, BufReader};
+use std::path::Path;
+use std::fs::{self, File};
+use tauri::{Manager, State};
 use events::models::{BookmarkPayload, SyncEvent, EventLog};
 use events::replay_events;
 use events::cleaner;
 use events::metadata;
-use rusqlite::params;
+use rusqlite::{params, params_from_iter};
+use db::browser_scanner;
 
 struct DbState {
     conn: Mutex<rusqlite::Connection>,
+    sync_lock: Mutex<()>,
 }
+
+fn debug_log_path_from_conn(conn: &rusqlite::Connection) -> Option<String> {
+    conn.path()
+        .map(|db_path| Path::new(db_path).with_file_name("debug.log").to_string_lossy().to_string())
+}
+
+fn append_debug_log(conn: &rusqlite::Connection, message: &str) {
+    let line = format!("[{}] {}", chrono::Utc::now().to_rfc3339(), message);
+    eprintln!("{line}");
+    if let Some(log_path) = debug_log_path_from_conn(conn) {
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
+fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM app_settings WHERE key = ?1 LIMIT 1",
+        params![key],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+fn set_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn with_sync_guard<T, F>(state: State<'_, DbState>, action: F) -> Result<T, String>
+where
+    F: FnOnce(&mut rusqlite::Connection) -> Result<T, String>,
+{
+    let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    action(&mut conn)
+}
+
+fn mark_pending_push(conn: &rusqlite::Connection, pending: bool) -> Result<(), String> {
+    set_setting(conn, "event_sync_pending_push", if pending { "1" } else { "0" })
+}
+
+fn tokenize_search_query(query: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for token in query.split_whitespace() {
+        let t = token.trim().to_lowercase();
+        if !t.is_empty() && !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    out
+}
+
+fn search_clause_for_param(param_index: usize) -> String {
+    let p = param_index + 1;
+    format!(
+        "(b.title LIKE ?{p} OR b.host LIKE ?{p} OR EXISTS (SELECT 1 FROM tags t JOIN bookmark_tags bt ON t.id = bt.tag_id WHERE bt.bookmark_id = b.id AND t.name LIKE ?{p}))"
+    )
+}
+
+fn resolve_bookmark_id_for_url(
+    conn: &rusqlite::Connection,
+    cleaned_url: &str,
+    fallback_id: &str,
+) -> String {
+    conn.query_row(
+        "SELECT id FROM bookmarks WHERE canonical_url = ?1 LIMIT 1",
+        params![cleaned_url],
+        |r| r.get::<_, String>(0),
+    )
+    .unwrap_or_else(|_| fallback_id.to_string())
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct FolderNode { id: String, parent_id: Option<String>, name: String }
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct TagNode { id: String, name: String }
+
+fn map_bookmark_row(row: &rusqlite::Row) -> rusqlite::Result<BookmarkPayload> {
+    let tag_str: Option<String> = row.get(7)?;
+    let tags = tag_str.map(|s| s.split(',').map(|t| t.to_string()).collect());
+    
+    Ok(BookmarkPayload {
+        id: row.get(0)?, url: row.get(1)?, title: row.get(2)?, description: row.get(3)?,
+        favicon_url: row.get(4)?, host: row.get(5)?, created_at: row.get(6)?, tags,
+    })
+}
+
+const BOOKMARK_SELECT_SQL: &str = "
+    SELECT b.id, b.url, b.title, b.description, b.favicon_url, b.host, b.created_at,
+    (SELECT GROUP_CONCAT(t.name) FROM tags t JOIN bookmark_tags bt ON t.id = bt.tag_id WHERE bt.bookmark_id = b.id) as tag_list
+    FROM bookmarks b
+";
 
 #[tauri::command]
 fn get_bookmarks(state: State<'_, DbState>) -> Result<Vec<BookmarkPayload>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    
-    let mut stmt = conn.prepare("SELECT id, url, title, description, favicon_url, host, created_at FROM bookmarks WHERE is_deleted = 0 ORDER BY created_at DESC")
-        .map_err(|e| e.to_string())?;
-        
-    let iter = stmt.query_map([], |row| {
-        Ok(BookmarkPayload {
-            id: row.get(0)?,
-            url: row.get(1)?,
-            title: row.get(2)?,
-            description: row.get(3)?,
-            favicon_url: row.get(4)?,
-            host: row.get(5)?,
-            created_at: row.get(6)?,
-        })
-    }).map_err(|e| e.to_string())?;
-    
-    let mut bookmarks = Vec::new();
-    for b in iter {
-        if let Ok(bookmark) = b {
-            bookmarks.push(bookmark);
-        }
-    }
-    
-    Ok(bookmarks)
+    let sql = format!("{} WHERE b.is_deleted = 0 ORDER BY b.created_at DESC", BOOKMARK_SELECT_SQL);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let iter = stmt.query_map([], map_bookmark_row).map_err(|e| e.to_string())?;
+    let mut res = Vec::new();
+    for b in iter { if let Ok(x) = b { res.push(x); } }
+    Ok(res)
 }
 
 #[tauri::command]
 fn search_bookmarks(state: State<'_, DbState>, query: String) -> Result<Vec<BookmarkPayload>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    
-    let mut stmt = conn.prepare(
-        "SELECT b.id, b.url, b.title, b.description, b.favicon_url, b.host, b.created_at 
-         FROM bookmarks b
-         JOIN bookmarks_fts fts ON b.rowid = fts.rowid
-         WHERE bookmarks_fts MATCH ?1 AND b.is_deleted = 0
-         ORDER BY fts.rank"
-    ).map_err(|e| e.to_string())?;
-        
-    let iter = stmt.query_map([&query], |row| {
-        Ok(BookmarkPayload {
-            id: row.get(0)?,
-            url: row.get(1)?,
-            title: row.get(2)?,
-            description: row.get(3)?,
-            favicon_url: row.get(4)?,
-            host: row.get(5)?,
-            created_at: row.get(6)?,
-        })
-    }).map_err(|e| e.to_string())?;
-    
-    let mut bookmarks = Vec::new();
-    for b in iter {
-        if let Ok(bookmark) = b {
-            bookmarks.push(bookmark);
-        }
+
+    let tokens = tokenize_search_query(&query);
+    if tokens.is_empty() {
+        let sql = format!("{} WHERE b.is_deleted = 0 ORDER BY b.created_at DESC", BOOKMARK_SELECT_SQL);
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let iter = stmt.query_map([], map_bookmark_row).map_err(|e| e.to_string())?;
+        let mut res = Vec::new();
+        for b in iter { if let Ok(x) = b { res.push(x); } }
+        return Ok(res);
     }
+
+    let term_clauses: Vec<String> = tokens
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| search_clause_for_param(idx))
+        .collect();
+    let sql = format!(
+        "{} WHERE b.is_deleted = 0 AND {} ORDER BY b.created_at DESC",
+        BOOKMARK_SELECT_SQL,
+        term_clauses.join(" AND ")
+    );
+
+    let patterns: Vec<String> = tokens.iter().map(|t| format!("%{}%", t)).collect();
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let iter = stmt
+        .query_map(params_from_iter(patterns.iter()), map_bookmark_row)
+        .map_err(|e| e.to_string())?;
+    let mut res = Vec::new();
+    for b in iter { if let Ok(x) = b { res.push(x); } }
+    Ok(res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tokenize_search_query, search_clause_for_param, resolve_bookmark_id_for_url};
+    use rusqlite::{Connection, params};
+
+    #[test]
+    fn tokenize_search_query_should_split_by_whitespace_and_dedup() {
+        let tokens = tokenize_search_query("  rust   tag:work   rust  ");
+        assert_eq!(tokens, vec!["rust".to_string(), "tag:work".to_string()]);
+    }
+
+    #[test]
+    fn search_clause_should_not_match_raw_url_path() {
+        let clause = search_clause_for_param(1);
+        assert!(!clause.contains("b.url LIKE"));
+        assert!(clause.contains("b.title LIKE"));
+        assert!(clause.contains("b.host LIKE"));
+        assert!(clause.contains("t.name LIKE"));
+    }
+
+    #[test]
+    fn resolve_bookmark_id_should_use_existing_row_when_canonical_url_exists() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        conn.execute_batch(
+            "
+            CREATE TABLE bookmarks (
+              id TEXT PRIMARY KEY,
+              url TEXT NOT NULL,
+              canonical_url TEXT UNIQUE NOT NULL
+            );
+            ",
+        )
+        .expect("create table");
+        conn.execute(
+            "INSERT INTO bookmarks (id, url, canonical_url) VALUES (?1, ?2, ?3)",
+            params!["existing-id", "https://juejin.cn/post/1", "https://juejin.cn/post/1"],
+        )
+        .expect("seed bookmark");
+
+        let resolved = resolve_bookmark_id_for_url(&conn, "https://juejin.cn/post/1", "new-import-id");
+        assert_eq!(resolved, "existing-id");
+    }
+}
+
+#[tauri::command]
+fn get_folders(state: State<'_, DbState>) -> Result<Vec<FolderNode>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, parent_id, name FROM folders ORDER BY name ASC").map_err(|e| e.to_string())?;
+    let iter = stmt.query_map([], |row| Ok(FolderNode { id: row.get(0)?, parent_id: row.get(1)?, name: row.get(2)? })).map_err(|e| e.to_string())?;
+    let mut res = Vec::new();
+    for f in iter { if let Ok(x) = f { res.push(x); } }
+    let sample_ids = res.iter().take(5).map(|f| f.id.clone()).collect::<Vec<_>>().join(",");
+    append_debug_log(&conn, &format!("get_folders count={} sample_ids={}", res.len(), sample_ids));
+    Ok(res)
+}
+
+#[tauri::command]
+fn get_tags(state: State<'_, DbState>) -> Result<Vec<TagNode>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, name FROM tags ORDER BY name ASC").map_err(|e| e.to_string())?;
+    let iter = stmt.query_map([], |row| Ok(TagNode { id: row.get(0)?, name: row.get(1)? })).map_err(|e| e.to_string())?;
+    let mut res = Vec::new();
+    for t in iter { if let Ok(x) = t { res.push(x); } }
+    Ok(res)
+}
+
+#[tauri::command]
+fn get_delete_sync_setting(state: State<'_, DbState>) -> Result<bool, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let raw = get_setting(&conn, "sync_delete_to_browser").unwrap_or_else(|| "0".to_string());
+    Ok(raw == "1" || raw.eq_ignore_ascii_case("true"))
+}
+
+#[tauri::command]
+fn set_delete_sync_setting(state: State<'_, DbState>, enabled: bool) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    set_setting(&conn, "sync_delete_to_browser", if enabled { "1" } else { "0" })
+}
+
+#[tauri::command]
+fn get_bookmarks_by_folder(state: State<'_, DbState>, folder_id: String) -> Result<Vec<BookmarkPayload>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let sql = format!("{} JOIN folder_bookmarks fb ON b.id = fb.bookmark_id WHERE fb.folder_id = ?1 AND b.is_deleted = 0 ORDER BY b.created_at DESC", BOOKMARK_SELECT_SQL);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let iter = stmt.query_map([&folder_id], map_bookmark_row).map_err(|e| e.to_string())?;
+    let mut res = Vec::new();
+    for b in iter { if let Ok(x) = b { res.push(x); } }
+    Ok(res)
+}
+
+#[tauri::command]
+fn get_bookmarks_by_tag(state: State<'_, DbState>, tag_id: String) -> Result<Vec<BookmarkPayload>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let sql = format!("{} JOIN bookmark_tags bt ON b.id = bt.bookmark_id WHERE bt.tag_id = ?1 AND b.is_deleted = 0 ORDER BY b.created_at DESC", BOOKMARK_SELECT_SQL);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let iter = stmt.query_map([&tag_id], map_bookmark_row).map_err(|e| e.to_string())?;
+    let mut res = Vec::new();
+    for b in iter { if let Ok(x) = b { res.push(x); } }
+    Ok(res)
+}
+
+#[tauri::command]
+fn add_tag_to_bookmark(state: State<'_, DbState>, bookmark_id: String, tag_name: String) -> Result<(), String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let tag_id = uuid::Uuid::new_v4().to_string();
     
-    Ok(bookmarks)
+    // 1. Add tag event
+    let tag_event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: "local".into(), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::TagAdded { id: tag_id.clone(), name: tag_name } };
+    replay_events(&mut conn, vec![tag_event]).map_err(|e| e.to_string())?;
+    
+    // 2. Fetch actual tag_id (if already existed)
+    let actual_tag_id: String = conn.query_row("SELECT id FROM tags WHERE name = (SELECT name FROM tags WHERE id = ?1)", params![tag_id], |r| r.get(0))
+        .unwrap_or(tag_id);
+
+    // 3. Link event
+    let link_event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: "local".into(), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::BookmarkTagged { bookmark_id, tag_id: actual_tag_id } };
+    replay_events(&mut conn, vec![link_event])
+}
+
+#[tauri::command]
+fn remove_tag_from_bookmark(state: State<'_, DbState>, bookmark_id: String, tag_name: String) -> Result<(), String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let tag_id: String = match conn.query_row("SELECT id FROM tags WHERE name = ?1 LIMIT 1", params![tag_name], |r| r.get(0)) {
+        Ok(id) => id,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+
+    let event = EventLog {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        device_id: "local".into(),
+        timestamp: chrono::Utc::now().timestamp_millis(),
+        event: SyncEvent::BookmarkUntagged { bookmark_id, tag_id },
+    };
+    replay_events(&mut conn, vec![event])
+}
+
+#[tauri::command]
+fn delete_folder(state: State<'_, DbState>, id: String) -> Result<(), String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let before_folder_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM folders WHERE id = ?1", params![id.clone()], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let before_link_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM folder_bookmarks WHERE folder_id = ?1", params![id.clone()], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let before_child_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM folders WHERE parent_id = ?1", params![id.clone()], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    append_debug_log(
+        &conn,
+        &format!(
+            "delete_folder start id={} before_folders={} before_links={} before_children={}",
+            id, before_folder_count, before_link_count, before_child_count
+        ),
+    );
+
+    let event = EventLog {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        device_id: "local".into(),
+        timestamp: chrono::Utc::now().timestamp_millis(),
+        event: SyncEvent::FolderDeleted { id: id.clone() },
+    };
+    if let Err(e) = replay_events(&mut conn, vec![event]) {
+        append_debug_log(&conn, &format!("delete_folder replay_events failed id={} err={}", id, e));
+        return Err(e);
+    }
+    append_debug_log(&conn, &format!("delete_folder replay_events ok id={}", id));
+
+    let fallback_deleted = conn
+        .execute("DELETE FROM folders WHERE id = ?1", params![id.clone()])
+        .map_err(|e| e.to_string())?;
+    let after_folder_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM folders WHERE id = ?1", params![id.clone()], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    append_debug_log(
+        &conn,
+        &format!(
+            "delete_folder end id={} fallback_deleted={} after_folders={}",
+            id, fallback_deleted, after_folder_count
+        ),
+    );
+    if after_folder_count > 0 {
+        return Err(format!("删除失败：文件夹 {} 仍存在", id));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_folder(state: State<'_, DbState>, id: String, name: String) -> Result<(), String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: "local".into(), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::FolderRenamed { id, name } };
+    replay_events(&mut conn, vec![event])
+}
+
+#[tauri::command]
+fn add_bookmark_to_folder(state: State<'_, DbState>, bookmark_id: String, folder_id: String) -> Result<(), String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: "local".into(), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::BookmarkAddedToFolder { bookmark_id, folder_id } };
+    replay_events(&mut conn, vec![event])
+}
+
+#[tauri::command]
+fn remove_bookmark_from_folder(state: State<'_, DbState>, bookmark_id: String, folder_id: String) -> Result<(), String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: "local".into(), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::BookmarkRemovedFromFolder { bookmark_id, folder_id } };
+    replay_events(&mut conn, vec![event])
+}
+
+#[tauri::command]
+fn get_bookmark_folders(state: State<'_, DbState>, bookmark_id: String) -> Result<Vec<String>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT folder_id FROM folder_bookmarks WHERE bookmark_id = ?1").map_err(|e| e.to_string())?;
+    let iter = stmt.query_map([&bookmark_id], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    let mut res = Vec::new();
+    for id in iter { if let Ok(x) = id { res.push(x); } }
+    Ok(res)
+}
+
+#[tauri::command]
+fn get_debug_log_path(state: State<'_, DbState>) -> Result<String, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    debug_log_path_from_conn(&conn).ok_or_else(|| "无法获取日志路径".to_string())
+}
+
+#[tauri::command]
+fn write_debug_log(state: State<'_, DbState>, message: String) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    append_debug_log(&conn, &format!("frontend {}", message));
+    Ok(())
 }
 
 #[tauri::command]
 fn add_bookmark(state: State<'_, DbState>, mut payload: BookmarkPayload) -> Result<(), String> {
     let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
-    
-    // Clean tracking params
     payload.url = cleaner::clean_url(&payload.url);
-    let new_host = payload.host.clone().unwrap_or_default();
-    
-    // In a real CQRS system, you only persist the event to the Event Log,
-    // and a separate reactor processes the logs and writes to `bookmarks` table.
-    // For simplicity of [M1], we directly run replay_events on an synthetic log here.
-    // Prepare background fetch params before payload moves
-    let url_to_fetch = payload.url.clone();
     let bm_id = payload.id.clone();
+    let url_to_fetch = payload.url.clone();
+    let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: "local".into(), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::BookmarkAdded(payload) };
+    replay_events(&mut conn, vec![event]).map_err(|e| e.to_string())?;
     
-    let event_log = EventLog {
-        event_id: uuid::Uuid::new_v4().to_string(),
-        device_id: "local_device".to_string(),
-        timestamp: chrono::Utc::now().timestamp_millis(),
-        event: SyncEvent::BookmarkAdded(payload),
-    };
-
-    replay_events(&mut conn, vec![event_log]).map_err(|e| e.to_string())?;
-    
-    // Spawn background task to fetch metadata
-    let db_path = state.conn.lock().unwrap().path().map(|p| p.to_string());
-    
-    if let Some(path) = db_path {
+    let path = conn.path().map(|p| p.to_string());
+    if let Some(p) = path {
         thread::spawn(move || {
             if let Ok(meta) = metadata::fetch_metadata(&url_to_fetch) {
-                if let Ok(background_conn) = rusqlite::Connection::open(path) {
-                    let title = meta.title.unwrap_or(format!("Mock Title for {}", new_host));
-                    let favicon = meta.favicon_url.unwrap_or_default();
-                    
-                    let _ = background_conn.execute(
-                        "UPDATE bookmarks SET title = ?1, favicon_url = ?2 WHERE id = ?3",
-                        params![title, favicon, bm_id]
-                    );
-                    println!("Async meta synced for {}", bm_id);
+                if let Ok(c) = rusqlite::Connection::open(p) {
+                    let _ = c.execute("UPDATE bookmarks SET title = ?1, favicon_url = ?2 WHERE id = ?3", params![meta.title, meta.favicon_url, bm_id]);
                 }
             }
         });
     }
-
     Ok(())
 }
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+fn delete_bookmark(
+    state: State<'_, DbState>,
+    id: String,
+    sync_browser_delete: Option<bool>,
+) -> Result<(), String> {
+    let bookmark_id = id.clone();
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: "local".into(), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::BookmarkDeleted { id } };
+    replay_events(&mut conn, vec![event])?;
+
+    if sync_browser_delete.unwrap_or(false) {
+        let deleted = browser_scanner::delete_bookmark_in_browser(&bookmark_id)?;
+        append_debug_log(&conn, &format!("delete_bookmark browser_delete={} bookmark_id={}", deleted, bookmark_id));
+    }
+    Ok(())
 }
 
 #[tauri::command]
-fn save_credentials(repo_url: String, token: String) -> Result<(), String> {
-    credentials::save_credentials(&repo_url, &token)
+fn update_bookmark(state: State<'_, DbState>, payload: BookmarkPayload) -> Result<(), String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: "local".into(), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::BookmarkUpdated(payload) };
+    replay_events(&mut conn, vec![event])
 }
 
 #[tauri::command]
-fn trigger_sync(app: tauri::AppHandle) -> Result<String, String> {
-    // 1. Get credentials
-    let (repo_url, token) = credentials::get_credentials()?;
-    
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    
-    // 2. Open or Clone repo
-    let repo = init_or_open_repo(&app_data_dir, &repo_url, &token)?;
+fn create_folder(state: State<'_, DbState>, name: String, parent_id: Option<String>) -> Result<(), String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: "local".into(), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::FolderAdded { id: uuid::Uuid::new_v4().to_string(), parent_id, name } };
+    replay_events(&mut conn, vec![event])
+}
 
-    // 3. (Mock) Write some new event logs to the repo
-    let events_dir = app_data_dir.join("sync-repo").join("events");
-    std::fs::create_dir_all(&events_dir).map_err(|e| e.to_string())?;
-    
-    let dbg_file = events_dir.join(format!("{}.json", uuid::Uuid::new_v4()));
-    std::fs::write(&dbg_file, "{\"mock\": \"event_data\"}").map_err(|e| e.to_string())?;
+#[tauri::command]
+fn import_browser_bookmarks(state: State<'_, DbState>) -> Result<usize, String> {
+    let nodes = browser_scanner::scan_all_nodes();
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut count = 0;
+    for n in nodes {
+        let stable_id = format!("{}-{}", n.browser.to_lowercase(), n.original_id);
+        let stable_parent_id = n.parent_original_id.map(|pid| format!("{}-{}", n.browser.to_lowercase(), pid));
+        if n.is_folder {
+            let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: format!("{}_import", n.browser), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::FolderAdded { id: stable_id, parent_id: stable_parent_id, name: n.title } };
+            let _ = replay_events(&mut conn, vec![event]);
+        } else {
+            let url = cleaner::clean_url(&n.url.unwrap_or_default());
+            if url.is_empty() { continue; }
+            let payload = BookmarkPayload { id: stable_id.clone(), url: url.clone(), title: Some(n.title), description: None, favicon_url: None, host: url::Url::parse(&url).ok().and_then(|u| u.host_str().map(|h| h.to_string())), created_at: chrono::Utc::now().to_rfc3339(), tags: None };
+            let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: format!("{}_import", n.browser), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::BookmarkAdded(payload) };
+            if replay_events(&mut conn, vec![event]).is_ok() {
+                if let Some(fid) = stable_parent_id {
+                    let actual_bookmark_id = resolve_bookmark_id_for_url(&conn, &url, &stable_id);
+                    let _ = conn.execute(
+                        "INSERT INTO folder_bookmarks (folder_id, bookmark_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+                        params![fid, actual_bookmark_id],
+                    );
+                }
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
 
-    // 4. Commit and Push (Push is omitted below for brevity in M3, uses git push equivalent)
-    commit_all(&repo, "Sync incoming local bookmarks.")?;
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct BrowserAutoSyncSettings {
+    startup_enabled: bool,
+    interval_enabled: bool,
+    interval_minutes: u32,
+}
 
-    Ok("Synced successfully".to_string())
+#[tauri::command]
+fn get_browser_auto_sync_settings(state: State<'_, DbState>) -> Result<BrowserAutoSyncSettings, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let startup_enabled = get_setting(&conn, "browser_auto_sync_startup")
+        .map(|v| v == "1")
+        .unwrap_or(true);
+    let interval_enabled = get_setting(&conn, "browser_auto_sync_interval_enabled")
+        .map(|v| v == "1")
+        .unwrap_or(true);
+    let interval_minutes = get_setting(&conn, "browser_auto_sync_interval_minutes")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(5)
+        .max(1);
+    Ok(BrowserAutoSyncSettings {
+        startup_enabled,
+        interval_enabled,
+        interval_minutes,
+    })
+}
+
+#[tauri::command]
+fn set_browser_auto_sync_settings(
+    state: State<'_, DbState>,
+    startup_enabled: bool,
+    interval_enabled: bool,
+    interval_minutes: u32,
+) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let minutes = interval_minutes.max(1);
+    set_setting(&conn, "browser_auto_sync_startup", if startup_enabled { "1" } else { "0" })?;
+    set_setting(&conn, "browser_auto_sync_interval_enabled", if interval_enabled { "1" } else { "0" })?;
+    set_setting(&conn, "browser_auto_sync_interval_minutes", &minutes.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_git_sync_repo_dir(state: State<'_, DbState>) -> Result<String, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    Ok(get_setting(&conn, "git_sync_repo_dir").unwrap_or_default())
+}
+
+#[tauri::command]
+fn set_git_sync_repo_dir(state: State<'_, DbState>, repo_dir: String) -> Result<String, String> {
+    if !sync::is_git_repo_dir(&repo_dir) {
+        return Err("目录不是 git 仓库".to_string());
+    }
+    let branch = sync::current_branch(&repo_dir)?;
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    set_setting(&conn, "git_sync_repo_dir", &repo_dir)?;
+    Ok(branch)
+}
+
+#[tauri::command]
+fn sync_github_incremental(state: State<'_, DbState>) -> Result<(), String> {
+    with_sync_guard(state, |conn| {
+        let repo_dir = get_setting(conn, "git_sync_repo_dir").ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
+        if !sync::is_git_repo_dir(&repo_dir) {
+            return Err("Git 仓库目录无效".to_string());
+        }
+        sync_events_from_repo(conn, &repo_dir)?;
+        sync_events_to_repo(conn, &repo_dir)?;
+        mark_pending_push(conn, false)?;
+        Ok(())
+    })
+}
+
+fn sync_events_from_repo(conn: &mut rusqlite::Connection, repo_dir: &str) -> Result<(), String> {
+    sync::git_pull_current_branch(repo_dir)?;
+    let events_dir = sync::ensure_events_dir(repo_dir)?;
+    let repo_events_path = events_dir.join("events.ndjson");
+    if !repo_events_path.exists() {
+        return Ok(());
+    }
+    let f = File::open(&repo_events_path).map_err(|e| e.to_string())?;
+    let reader = BufReader::new(f);
+    let mut logs = Vec::new();
+    for line in reader.lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let log: EventLog = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+        logs.push(log);
+    }
+    replay_events(conn, logs)?;
+    Ok(())
+}
+
+fn sync_events_to_repo(conn: &rusqlite::Connection, repo_dir: &str) -> Result<(), String> {
+    let events_dir = sync::ensure_events_dir(repo_dir)?;
+    let repo_events_path = events_dir.join("events.ndjson");
+    let db_path = conn.path().ok_or_else(|| "无法定位数据库路径".to_string())?;
+    let app_dir = Path::new(db_path).parent().ok_or_else(|| "无法定位应用目录".to_string())?;
+    let local_events_path = app_dir.join("events.ndjson");
+    if !local_events_path.exists() {
+        File::create(&local_events_path).map_err(|e| e.to_string())?;
+    }
+    fs::copy(&local_events_path, &repo_events_path).map_err(|e| e.to_string())?;
+    sync::git_add_commit_push_current_branch(
+        repo_dir,
+        "events/events.ndjson",
+        &format!("sync events {}", chrono::Utc::now().to_rfc3339()),
+    )?;
+    Ok(())
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct EventAutoSyncSettings {
+    startup_pull_enabled: bool,
+    interval_enabled: bool,
+    interval_minutes: u32,
+    close_push_enabled: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct UiAppearanceSettings {
+    theme_mode: String,
+    background_enabled: bool,
+    background_image_data_url: Option<String>,
+    background_overlay_opacity: u32,
+}
+
+#[tauri::command]
+fn get_event_auto_sync_settings(state: State<'_, DbState>) -> Result<EventAutoSyncSettings, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let startup_pull_enabled = get_setting(&conn, "event_sync_startup_pull")
+        .map(|v| v == "1")
+        .unwrap_or(true);
+    let interval_enabled = get_setting(&conn, "event_sync_interval_enabled")
+        .map(|v| v == "1")
+        .unwrap_or(true);
+    let interval_minutes = get_setting(&conn, "event_sync_interval_minutes")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(5)
+        .max(1);
+    let close_push_enabled = get_setting(&conn, "event_sync_close_push")
+        .map(|v| v == "1")
+        .unwrap_or(true);
+    Ok(EventAutoSyncSettings {
+        startup_pull_enabled,
+        interval_enabled,
+        interval_minutes,
+        close_push_enabled,
+    })
+}
+
+#[tauri::command]
+fn set_event_auto_sync_settings(
+    state: State<'_, DbState>,
+    startup_pull_enabled: bool,
+    interval_enabled: bool,
+    interval_minutes: u32,
+    close_push_enabled: bool,
+) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let minutes = interval_minutes.max(1);
+    set_setting(&conn, "event_sync_startup_pull", if startup_pull_enabled { "1" } else { "0" })?;
+    set_setting(&conn, "event_sync_interval_enabled", if interval_enabled { "1" } else { "0" })?;
+    set_setting(&conn, "event_sync_interval_minutes", &minutes.to_string())?;
+    set_setting(&conn, "event_sync_close_push", if close_push_enabled { "1" } else { "0" })?;
+    Ok(())
+}
+
+#[tauri::command]
+fn sync_event_pull_only(state: State<'_, DbState>) -> Result<(), String> {
+    with_sync_guard(state, |conn| {
+        let repo_dir = get_setting(conn, "git_sync_repo_dir").ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
+        if !sync::is_git_repo_dir(&repo_dir) {
+            return Err("Git 仓库目录无效".to_string());
+        }
+        sync_events_from_repo(conn, &repo_dir)?;
+        let pending_push = get_setting(conn, "event_sync_pending_push")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        if pending_push {
+            sync_events_to_repo(conn, &repo_dir)?;
+            mark_pending_push(conn, false)?;
+        }
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn sync_event_push_only(state: State<'_, DbState>) -> Result<(), String> {
+    with_sync_guard(state, |conn| {
+        let repo_dir = get_setting(conn, "git_sync_repo_dir").ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
+        if !sync::is_git_repo_dir(&repo_dir) {
+            return Err("Git 仓库目录无效".to_string());
+        }
+        match sync_events_to_repo(conn, &repo_dir) {
+            Ok(_) => {
+                mark_pending_push(conn, false)?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = mark_pending_push(conn, true);
+                Err(e)
+            }
+        }
+    })
+}
+
+#[tauri::command]
+fn get_ui_appearance_settings(state: State<'_, DbState>) -> Result<UiAppearanceSettings, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let theme_mode = get_setting(&conn, "ui_theme_mode").unwrap_or_else(|| "system".to_string());
+    let background_enabled = get_setting(&conn, "ui_background_enabled")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let background_image_data_url = get_setting(&conn, "ui_background_image_data_url");
+    let background_overlay_opacity = get_setting(&conn, "ui_background_overlay_opacity")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(45)
+        .min(90);
+    Ok(UiAppearanceSettings {
+        theme_mode,
+        background_enabled,
+        background_image_data_url,
+        background_overlay_opacity,
+    })
+}
+
+#[tauri::command]
+fn set_ui_appearance_settings(
+    state: State<'_, DbState>,
+    theme_mode: String,
+    background_enabled: bool,
+    background_image_data_url: Option<String>,
+    background_overlay_opacity: u32,
+) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let normalized_theme = match theme_mode.as_str() {
+        "light" | "dark" | "system" => theme_mode,
+        _ => "system".to_string(),
+    };
+    let safe_opacity = background_overlay_opacity.min(90);
+    set_setting(&conn, "ui_theme_mode", &normalized_theme)?;
+    set_setting(
+        &conn,
+        "ui_background_enabled",
+        if background_enabled { "1" } else { "0" },
+    )?;
+    match background_image_data_url {
+        Some(v) => set_setting(&conn, "ui_background_image_data_url", &v)?,
+        None => {
+            let _ = conn.execute(
+                "DELETE FROM app_settings WHERE key = 'ui_background_image_data_url'",
+                [],
+            );
+        }
+    }
+    set_setting(
+        &conn,
+        "ui_background_overlay_opacity",
+        &safe_opacity.to_string(),
+    )?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -168,62 +755,56 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
-            let db_file = app_data_dir.join("bookmarks.db");
-            let conn = db::init_db(app_data_dir).expect("Failed to initialize database");
-            
-            // Manage DbState globally 
+            let conn = db::init_db(app_data_dir.clone()).expect("Failed to initialize database");
             app.manage(DbState {
                 conn: Mutex::new(conn),
+                sync_lock: Mutex::new(()),
             });
-            
-            // Spawn Native Messaging Observer Loop
-            let app_handle = app.handle().clone();
-            thread::spawn(move || {
-                loop {
-                    match events::native_messaging::read_message() {
-                        Ok(Some(msg)) => {
-                            // Optionally broadcast to JS frontend for realtime UI updates
-                            let _ = app_handle.emit("native-message", &msg);
-                            
-                            // Here you'd parse `msg` into SyncEvent and persist it via DbState
-                            println!("NativeMsg: {:?}", msg);
-                        },
-                        Ok(None) => break, // EOF means Chrome disconnected
-                        Err(e) => {
-                            eprintln!("NativeMsg Error: {}", e);
-                            break;
-                        }
-                    }
-                }
-            });
-
-            // Watch local SQLite changes so frontend can refresh immediately.
-            let watch_handle = app.handle().clone();
-            thread::spawn(move || {
-                let mut last_modified = std::fs::metadata(&db_file).and_then(|m| m.modified()).ok();
-                loop {
-                    thread::sleep(Duration::from_millis(500));
-                    let current = match std::fs::metadata(&db_file).and_then(|m| m.modified()) {
-                        Ok(ts) => ts,
-                        Err(_) => continue,
-                    };
-                    let changed = match last_modified {
-                        Some(prev) => current > prev,
-                        None => true,
-                    };
-                    if changed {
-                        last_modified = Some(current);
-                        let _ = watch_handle.emit("bookmarks-updated", "db-changed");
-                    }
-                }
-            });
-            
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                let state = window.state::<DbState>();
+                let sync_lock_result = state.sync_lock.lock();
+                if let Ok(sync_guard) = sync_lock_result {
+                    if let Ok(conn) = state.conn.lock() {
+                        let close_push_enabled = get_setting(&conn, "event_sync_close_push")
+                            .map(|v| v == "1")
+                            .unwrap_or(true);
+                        if close_push_enabled {
+                            if let Some(repo_dir) = get_setting(&conn, "git_sync_repo_dir") {
+                                if sync::is_git_repo_dir(&repo_dir) {
+                                    match sync_events_to_repo(&conn, &repo_dir) {
+                                        Ok(_) => {
+                                            let _ = mark_pending_push(&conn, false);
+                                            append_debug_log(&conn, "close push success");
+                                        }
+                                        Err(err) => {
+                                            let _ = mark_pending_push(&conn, true);
+                                            append_debug_log(&conn, &format!("close push failed: {err}"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    drop(sync_guard);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
-            greet, get_bookmarks, add_bookmark,
-            search_bookmarks,
-            save_credentials, trigger_sync
+            get_bookmarks, add_bookmark, search_bookmarks,
+            import_browser_bookmarks, get_folders, get_bookmarks_by_folder,
+            update_bookmark, delete_bookmark, create_folder, delete_folder,
+            rename_folder, add_bookmark_to_folder, remove_bookmark_from_folder, get_bookmark_folders,
+            get_delete_sync_setting, set_delete_sync_setting,
+            get_tags, get_bookmarks_by_tag, add_tag_to_bookmark, remove_tag_from_bookmark,
+            get_debug_log_path, write_debug_log,
+            get_browser_auto_sync_settings, set_browser_auto_sync_settings,
+            get_git_sync_repo_dir, set_git_sync_repo_dir, sync_github_incremental,
+            get_event_auto_sync_settings, set_event_auto_sync_settings,
+            sync_event_pull_only, sync_event_push_only,
+            get_ui_appearance_settings, set_ui_appearance_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

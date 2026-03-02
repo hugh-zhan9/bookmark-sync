@@ -477,3 +477,243 @@
 - `browser-extension/background-sync.test.js`
 - `browser-extension/native-host/full-sync.test.js`
 ----------------------------------------
+## [2026-03-02 14:10] [Feature]
+- **Change**: 实现扩展与桌面端实时同步闭环：扩展在安装/更新/启动/Native 重连时执行全量同步，点击插件图标可直接采集当前页入库，同时继续监听浏览器收藏事件；Native Host 新增 FullSync/PageCaptured 处理与批量幂等 upsert；桌面端新增 bookmarks-updated 事件监听与后端数据库变更通知，移除高频轮询。
+- **Risk Analysis**: 中等风险：涉及扩展权限与消息协议扩展，若用户未重新加载扩展或 Native Host 仍运行旧脚本会导致新事件不生效；数据库文件变更监听采用 500ms 轮询元数据，极端高频写入下可能产生较多前端刷新。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `browser-extension/background.js`
+- `browser-extension/manifest.json`
+- `browser-extension/native-host/db-writer.js`
+- `browser-extension/native-host/host.js`
+- `browser-extension/native-host/full-sync.test.js`
+- `browser-extension/background-sync.test.js`
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+- `bookmark-sync-app/src/App.realtime.test.tsx`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/package.json`
+- `bookmark-sync-app/package-lock.json`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 14:23] [Refactor]
+- **Change**: 完成 Native Host 单一职责改造：Host 不再直写 SQLite，仅转发事件到 pending_events.jsonl；Tauri 新增 native_ingest 入库模块统一处理 FullSync/PageCaptured/BookmarkAdded/BookmarkUpdated/BookmarkDeleted 并发出 bookmarks-updated 事件，实现单写路径与实时刷新。
+- **Risk Analysis**: 中高风险：写库职责迁移到 Tauri 后对队列消费可靠性更敏感，若 Tauri 未运行或队列解析异常会导致事件积压；已通过 Rust 单测覆盖幂等/删除恢复关键路径并通过全量构建验证。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/events/native_ingest.rs`
+- `bookmark-sync-app/src-tauri/src/events/mod.rs`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `browser-extension/native-host/host.js`
+- `browser-extension/native-host/package.json`
+- `browser-extension/native-host/package-lock.json`
+- `browser-extension/native-host/db-writer.js`
+- `browser-extension/native-host/db-writer.test.js`
+- `browser-extension/native-host/full-sync.test.js`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 14:34] [Feature]
+- **Change**: 新增桌面端一键自动配置浏览器连接能力：Tauri 增加 setup_native_host 命令，自动探测绝对 node 路径并写入 Native Host 启动脚本与 Chrome/Edge manifest；前端设置面板新增扩展 ID 输入与‘一键连接浏览器’按钮，用户无需手工终端命令。
+- **Risk Analysis**: 中等风险：自动配置依赖本机 Chrome/Edge 目录结构与 node 可执行路径探测，若系统环境差异较大可能需要补充平台分支；已通过 Rust 单测与全量构建验证。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/sync/native_host_installer.rs`
+- `bookmark-sync-app/src-tauri/src/sync/mod.rs`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src/App.tsx`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 14:40] [Feature]
+- **Change**: 升级浏览器连接配置为多扩展 ID 模式：自动发现 Chrome/Edge 已安装的拾页扩展 ID，并与手动补充 ID 合并去重后写入 Native Messaging manifest；前端设置页改为多 ID 输入（逗号/换行）并展示自动发现与最终生效列表。
+- **Risk Analysis**: 中等风险：自动发现依赖浏览器本地目录结构和扩展 manifest 特征匹配，若用户使用非标准 profile 目录或扩展信息变化可能需手动补充 ID；已通过 Rust 单测覆盖解析/去重/发现逻辑并完成前后端构建验证。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/sync/native_host_installer.rs`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src/App.tsx`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 14:46] [Feature]
+- **Change**: 新增浏览器连接状态自检能力：后端提供 get_browser_connection_status 命令读取 Chrome/Edge allowed_origins、Host 脚本存在性、队列文件状态、Host 日志最后事件；前端设置页新增‘检查连接状态’按钮与状态面板，便于快速定位扩展到 Native Host 到 Tauri 的链路断点。
+- **Risk Analysis**: 低到中风险：新增诊断读取本地文件路径，对功能链路无侵入；风险主要在不同系统目录结构导致部分字段为空，已通过单元测试与全量构建验证。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/sync/native_host_status.rs`
+- `bookmark-sync-app/src-tauri/src/sync/mod.rs`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src/App.tsx`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------
+## [2026-03-02 16:02] [Bugfix]
+- **Change**: 修复文件夹删除/重命名、书签编辑文件夹与标签、搜索多关键词模糊匹配，并补回实时刷新监听
+- **Risk Analysis**: 前端编辑弹窗新增文件夹与标签差异同步逻辑，若后端事件回放失败会导致部分更新未落库；文件夹改为单选映射，和历史多文件夹数据共存时仅保留一个目标文件夹，需结合真实数据验证迁移预期。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src-tauri/src/db/mod.rs`
+----------------------------------------
+## [2026-03-02 16:07] [Feature]
+- **Change**: 书签编辑支持多文件夹归属（多选）并按差异同步 folder_bookmarks，补充对应前端测试用例
+- **Risk Analysis**: 中等风险：多选依赖系统对 multiple select 的交互习惯（mac 需 Command，Windows 需 Ctrl），误操作可能导致未选中的文件夹被移除；已通过前端单测和构建验证。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+----------------------------------------
+## [2026-03-02 16:13] [Bugfix]
+- **Change**: 修复文件夹删除走事件溯源、搜索去除 URL 匹配并仅按标题/域名/标签检索，统一编辑弹窗文件夹输入样式并压缩书签卡片高度
+- **Risk Analysis**: 中等风险：删除改为事件后依赖 replay_events 正常写入；搜索去掉 URL 可能让少量用户期望的路径关键字检索失效，但符合当前需求；UI 压缩可能影响极小屏幕下点击精度。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/events/models.rs`
+- `bookmark-sync-app/src-tauri/src/db/mod.rs`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+----------------------------------------
+## [2026-03-02 16:19] [Bugfix]
+- **Change**: 编辑书签的文件夹改为可手动输入（不存在则创建、存在则关联），并增强删除文件夹兜底逻辑
+- **Risk Analysis**: 中等风险：手动输入依赖逗号分割与名称匹配，重名文件夹场景会匹配到首个同名项；删除增加直接 SQL 兜底后与事件删除双执行，但均为幂等删除，回归风险可控。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+----------------------------------------
+## [2026-03-02 16:24] [Bugfix]
+- **Change**: 为文件夹删除链路新增落盘日志（删除前后计数、事件执行、兜底删除），并提供日志路径命令用于排障
+- **Risk Analysis**: 中等风险：新增日志写文件会增加少量 I/O；删除命令增加状态校验后，若数据库异常会更早显式报错但不再静默失败。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+----------------------------------------
+## [2026-03-02 16:27] [Critical-Fix]
+- **Change**: 增加删除文件夹前后端联动日志并提供 write_debug_log 命令，删除按钮改为常显以排查点击链路未触发问题
+- **Risk Analysis**: 中风险：新增日志命令会增加少量日志 I/O；删除按钮常显可能轻微影响侧栏视觉，但显著提升可用性与排障能力。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src/App.tsx`
+----------------------------------------
+## [2026-03-02 16:28] [Bugfix]
+- **Change**: 定位到删除失败因确认框持续返回取消，已移除系统 confirm 阻断，删除点击直接触发后端删除链路
+- **Risk Analysis**: 低到中风险：取消二次确认后误删风险上升，但当前版本已具备日志追踪与后端状态校验，功能可用性优先。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+----------------------------------------
+## [2026-03-02 16:35] [Feature]
+- **Change**: 修复浏览器导入时书签与文件夹关系丢失（按 canonical_url 解析真实 bookmark_id 再建关联），并上线 GitHub 增量同步可用版本（保存凭据/立即同步/清除）及设置页入口
+- **Risk Analysis**: 中等风险：GitHub 同步目前基于 bookmarks.db 快照+main 分支推送，冲突处理为快进覆盖，若多端同时写入可能出现最后写入覆盖；导入关系修复依赖 canonical_url 一致性。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src-tauri/src/sync/mod.rs`
+- `bookmark-sync-app/src/App.tsx`
+----------------------------------------
+## [2026-03-02 16:42] [Feature]
+- **Change**: 新增删除同步浏览器开关（设置页可配置并持久化），删除书签可按稳定ID回写删除Chrome/Edge/Safari书签；修复本地浏览器导入时书签与文件夹关系丢失；完善GitHub增量同步功能
+- **Risk Analysis**: 中等风险：浏览器删除依赖稳定ID与本机书签文件结构，非导入/非浏览器来源书签会降级为仅删App；GitHub同步当前为bookmarks.db快照提交，冲突处理策略较简单。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/db/browser_scanner.rs`
+- `bookmark-sync-app/src-tauri/src/db/mod.rs`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src-tauri/src/sync/mod.rs`
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+----------------------------------------
+## [2026-03-02 16:57] [Feature]
+- **Change**: 实现浏览器->App 启动自动同步+5分钟可配置定时同步；实现基于本机Git目录/当前分支的事件级增量同步（pull/replay events/push），弃用PAT+repoURL方案
+- **Risk Analysis**: 中高风险：事件同步改为ndjson文件+git pull/push，若仓库无上游或存在复杂冲突会同步失败；已通过错误返回显式暴露并保留手动重试路径。
+- **Risk Level**: S1（高级: 关键流程失败、主要功能不可用或明显业务回归）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/src/db/mod.rs`
+- `bookmark-sync-app/src-tauri/src/events/mod.rs`
+- `bookmark-sync-app/src-tauri/src/sync/mod.rs`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+----------------------------------------
+## [2026-03-02 17:13] [Feature]
+- **Change**: 新增事件级自动同步策略：启动自动pull、定时增量同步、关闭自动push，并加入同步互斥与失败补偿标记
+- **Risk Analysis**: 主要风险在于关闭窗口时同步可能阻塞退出流程，以及定时同步与手动同步并发下的状态一致性。已通过前端防重入与后端互斥锁降低并发风险；关闭push失败会记录pending标记并在下次启动pull后补偿push，但极端网络异常下仍可能延迟到下一次可用网络。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+----------------------------------------
+## [2026-03-02 17:20] [Feature]
+- **Change**: 新增外观系统：支持亮色/暗色/跟随系统主题，以及背景图设置（开启、选择、清除、遮罩强度）并持久化到本地设置
+- **Risk Analysis**: 主要风险是浅色主题采用了对现有 Tailwind 颜色类的覆盖策略，后续新增样式类时可能出现个别区域未适配；背景图使用 data URL 存储可能增加设置表体积。已通过主题切换保存测试与全量构建验证，后续可逐步演进为完整语义化主题变量。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.css`
+- `bookmark-sync-app/src/App.test.tsx`
+- `bookmark-sync-app/src-tauri/src/lib.rs`
+----------------------------------------
+## [2026-03-02 17:24] [Bugfix]
+- **Change**: 修复亮色主题视觉异常并修复设置弹窗内容溢出不可滚动问题
+- **Risk Analysis**: 风险主要在于亮色主题覆盖规则变多，后续新增颜色类可能仍需补充映射；已通过现有前端测试与构建验证，功能风险低。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.css`
+----------------------------------------
+## [2026-03-02 17:27] [Refactor]
+- **Change**: 重构主题系统为语义化 token 驱动，新增根节点 data-theme 标记并统一亮暗主题颜色映射
+- **Risk Analysis**: 风险在于 token 映射覆盖了大量 Tailwind 颜色工具类，若后续引入未映射的新颜色类需要补充变量映射；已通过主题切换测试、全量前端测试与构建验证。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.css`
+- `bookmark-sync-app/src/App.test.tsx`
+----------------------------------------
+## [2026-03-02 17:28] [Refactor]
+- **Change**: 继续推进主题语义化：新增 btn-* 语义按钮体系并替换设置页主要操作按钮的硬编码颜色类
+- **Risk Analysis**: 风险较低，主要是按钮视觉在不同主题下的对比度变化；已新增样式类断言测试并通过全量前端测试与构建验证。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.css`
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+----------------------------------------
+## [2026-03-02 17:31] [Refactor]
+- **Change**: 继续统一按钮体系：主界面与弹窗页关键按钮替换为 btn-* 语义类（accent/neutral/danger/icon）
+- **Risk Analysis**: 风险较低，主要是按钮尺寸与对齐可能在极窄宽度下出现轻微变化；已新增按钮语义类测试并通过全量前端测试与构建验证。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.css`
+- `bookmark-sync-app/src/App.test.tsx`
+----------------------------------------
+## [2026-03-02 17:43] [Refactor]
+- **Change**: 完成侧栏与卡片状态色语义化：新增 nav/tag/card/token 语义类并替换硬编码状态样式
+- **Risk Analysis**: 风险在于语义类收口后局部间距和 hover 反馈可能与旧版有细微差异；已新增侧栏语义类测试并通过全量前端测试与构建。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.css`
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+----------------------------------------
+## [2026-03-02 17:45] [Refactor]
+- **Change**: 完成输入框与面板容器语义化：新增 input-field/panel-shell/panel-section 并在设置页与核心弹窗替换硬编码样式
+- **Risk Analysis**: 风险较低，主要为输入框 padding/对齐的细微视觉变化；已新增语义类测试并通过全量前端测试和构建。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.css`
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+----------------------------------------
+## [2026-03-02 18:02] [Bugfix]
+- **Change**: 修复标签新增保存链路并优化卡片操作区：新增标签按钮并入编辑/删除同一行，提交时对标签名 trim 后保存
+- **Risk Analysis**: 风险低，主要影响书签卡片右上角操作区交互；已新增测试覆盖并通过全量前端测试与构建。
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src/App.tsx`
+- `bookmark-sync-app/src/App.test.tsx`
+----------------------------------------

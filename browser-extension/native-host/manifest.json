@@ -1,9 +1,0 @@
-{
-    "name": "com.bookmark.sync.client",
-    "description": "拾页 Native Messaging Host",
-    "path": "~/.local/bin/shiiye-native-host",
-    "type": "stdio",
-    "allowed_origins": [
-        "chrome-extension://gedonlbaodnaemldelnleocfnlccepng/"
-    ]
-}
