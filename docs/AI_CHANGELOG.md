@@ -73,3 +73,12 @@
 - `docs/icon-preview/icon-macos-neumorph-glass-cloud-bookmark.png`
 - `docs/icon-preview/icon-macos-neumorph-metal-cloud-bookmark.png`
 ----------------------------------------
+## [2026-03-02 11:44] [Feature]
+- **Change**: 复用 AI 生成的应用图标，为主力浏览器采集插件添加 32/64/128 各分辨率的 icons。
+- **Risk Analysis**: 无风险；纯静态资源替换
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `.github/workflows/release.yml`
+- `browser-extension/manifest.json`
+- `browser-extension/icons/`
+----------------------------------------

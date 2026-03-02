@@ -50,15 +50,15 @@ jobs:
           releaseDraft: true
           prerelease: false
 
-      - name: Package Browser Extension (Ubuntu Only)
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: Package Browser Extension (macOS Only)
+        if: matrix.platform == 'macos-latest'
         run: |
           cd browser-extension
           zip -r ../bookmark-sync-extension-${{ github.ref_name }}.zip ./*
           cd ..
 
       - name: Upload Browser Extension to Release
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'macos-latest'
         uses: softprops/action-gh-release@v2
         with:
           files: bookmark-sync-extension-${{ github.ref_name }}.zip
