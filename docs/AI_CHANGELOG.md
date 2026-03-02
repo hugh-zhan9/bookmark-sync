@@ -36,3 +36,30 @@
 - **Changed Files**:
 - `.github/workflows/release.yml`
 ----------------------------------------
+## [2026-03-02 11:37] [Feature]
+- **Change**: 由大语言模型设计并生成第一版高质量应用图标，已通过 tauri cli 转换为全平台尺寸配图并覆盖。带有渐变背景、云朵与书签拟物元素。
+- **Risk Analysis**: 无风险；纯静态资源替换
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/src-tauri/icons/128x128.png`
+- `bookmark-sync-app/src-tauri/icons/128x128@2x.png`
+- `bookmark-sync-app/src-tauri/icons/32x32.png`
+- `bookmark-sync-app/src-tauri/icons/Square107x107Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square142x142Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square150x150Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square284x284Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square30x30Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square310x310Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square44x44Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square71x71Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square89x89Logo.png`
+- `bookmark-sync-app/src-tauri/icons/StoreLogo.png`
+- `bookmark-sync-app/src-tauri/icons/icon.icns`
+- `bookmark-sync-app/src-tauri/icons/icon.ico`
+- `bookmark-sync-app/src-tauri/icons/icon.png`
+- `bookmark-sync-app/app-icon.png`
+- `bookmark-sync-app/src-tauri/icons/64x64.png`
+- `bookmark-sync-app/src-tauri/icons/android/`
+- `bookmark-sync-app/src-tauri/icons/ios/`
+- `docs/icon-preview/`
+----------------------------------------
