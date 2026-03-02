@@ -29,3 +29,10 @@
 - **Changed Files**:
 - `.github/workflows/release.yml`
 ----------------------------------------
+## [2026-03-02 11:24] [Bugfix]
+- **Change**: 修复 Github Actions 发布报错：添加 GITHUB_TOKEN 的 contents: write 权限，以支持通过 tauri-action 创建并上传 Release 资产。
+- **Risk Analysis**: 低级风险；修正云端动作权限
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `.github/workflows/release.yml`
+----------------------------------------
