@@ -164,3 +164,56 @@
 - `bookmark-sync-app/app-icon.svg`
 - `bookmark-sync-app/public/app-icon.svg`
 ----------------------------------------
+## [2026-03-02 12:29] [Feature]
+- **Change**: 响应用户进一步需求，彻底剥除 SVG 图标的任何圆形底板和占位背色，将其更新为纯透明背景的不规则多边形（云朵+书签边缘）失量 Logo 并重新全局转换下发。
+- **Risk Analysis**: 无风险；优化了透明度
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `bookmark-sync-app/app-icon.svg`
+- `bookmark-sync-app/public/app-icon.svg`
+- `bookmark-sync-app/src-tauri/icons/128x128.png`
+- `bookmark-sync-app/src-tauri/icons/128x128@2x.png`
+- `bookmark-sync-app/src-tauri/icons/32x32.png`
+- `bookmark-sync-app/src-tauri/icons/64x64.png`
+- `bookmark-sync-app/src-tauri/icons/Square142x142Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square150x150Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square284x284Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square30x30Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square310x310Logo.png`
+- `bookmark-sync-app/src-tauri/icons/Square89x89Logo.png`
+- `bookmark-sync-app/src-tauri/icons/StoreLogo.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-hdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-mdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-mdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-mdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xhdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png`
+- `bookmark-sync-app/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_round.png`
+- `bookmark-sync-app/src-tauri/icons/icon.icns`
+- `bookmark-sync-app/src-tauri/icons/icon.ico`
+- `bookmark-sync-app/src-tauri/icons/icon.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-20x20@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-20x20@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@2x-1.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-29x29@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@2x-1.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-40x40@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-512@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-60x60@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-60x60@3x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-76x76@1x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-76x76@2x.png`
+- `bookmark-sync-app/src-tauri/icons/ios/AppIcon-83.5x83.5@2x.png`
+- `browser-extension/icons/128.png`
+- `browser-extension/icons/32.png`
+- `browser-extension/icons/64.png`
+----------------------------------------
