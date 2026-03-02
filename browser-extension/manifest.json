@@ -1,6 +1,6 @@
 {
     "manifest_version": 3,
-    "name": "Bookmark Sync Client",
+    "name": "拾页",
     "version": "1.0.0",
     "description": "Local-first bookmark synchronizer client capturing browser events.",
     "permissions": [
