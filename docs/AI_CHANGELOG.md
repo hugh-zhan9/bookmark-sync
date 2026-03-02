@@ -22,3 +22,10 @@
 - **Changed Files**:
 - `.github/workflows/release.yml`
 ----------------------------------------
+## [2026-03-02 11:22] [Bugfix]
+- **Change**: 修复 Github Actions 在 Ubuntu 22.04 下编译报错：更新系统库依赖 libwebkit2gtk-4.0 到 4.1 并补充 libsoup3。
+- **Risk Analysis**: 低级风险；修正构建云端依赖项
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `.github/workflows/release.yml`
+----------------------------------------
