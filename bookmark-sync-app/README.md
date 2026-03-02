@@ -1,7 +1,29 @@
-# Tauri + React + Typescript
+# Bookmark Sync App
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+桌面端应用（Tauri + React + TypeScript + Rust）。
 
-## Recommended IDE Setup
+## 启动开发
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+npm install
+npm run dev
+npm run tauri dev
+```
+
+## 测试与构建
+
+```bash
+npm test
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+## 打包
+
+```bash
+npm run tauri build -- --bundles app
+```
+
+产物：
+
+`src-tauri/target/release/bundle/macos/拾页.app`

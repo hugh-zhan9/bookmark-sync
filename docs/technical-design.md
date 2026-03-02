@@ -1,37 +1,78 @@
-# Bookmark Sync - Technical Design Document
+# Bookmark Sync 技术设计（当前实现版）
 
-## 1. 项目背景与目标
-本项目旨在构建一个跨设备、跨浏览器的本地优先（Local-First）书签管理与同步工具。通过提供专业的 UI 界面，实现书签的统一管理、标签化、分组（如按 Host）以及跨设备的增量同步。
+## 1. 目标
 
-## 2. 核心架构设计
+构建一个本地优先的书签管理工具，支持多浏览器导入、事件级增量同步、多端一致性与可维护的界面系统。
 
-为了解决不同浏览器数据互相隔离及其数据库被独占锁定的痛点，并解决 Git 直接同步可能导致的合并冲突问题，本系统采用以下架构：
+## 2. 架构总览
 
-### 2.1 拓扑结构
-- **前端页面 (UI/View)**：基于 React/Vue 等现代框架构建的单页应用，负责专业级的书签展示与交互。
-- **本地宿主 (Tauri/Rust)**：作为桌面端守护进程，负责与操作系统交互、Git 命令行封装以及 SQLite 本地数据读写，兼顾轻量与高性能。
-- **数据采集 (Browser Extension)**：开发统一的跨浏览器插件（支持 Chrome/Edge/Firefox 等），用于实时监听浏览器的 `bookmarks` 变更，通过 [Native Messaging](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_messaging) 实时推送给桌面端。
-- **远程存储 (Git/Github)**：利用目标用户的私有 Github 仓库作为后端，实现异地灾备与各端数据同步。
+- 前端：React + TypeScript（`bookmark-sync-app/src`）
+- 后端：Tauri + Rust（`bookmark-sync-app/src-tauri/src`）
+- 本地存储：SQLite（书签实体 + 关系表 + 应用设置）
+- 事件模型：Event Sourcing（`EventLog` 回放）
+- 远程同步：本机 Git 仓库目录中的 `events/events.ndjson`
 
-### 2.2 数据同步与防冲突模型 (CQRS / Event Sourcing)
-- **局限与挑战**：如果直接将所有书签存为一个巨大的 `bookmarks.json` 文件，多设备同时推拉极易引发 Git 的 Merge Conflict，技术门槛不可接受。
-- **破局方案 (Event Sourcing)**：系统不直接同步最终状态树。相反，将用户的每一次变更（如增加、删除、修改标签）记录为一条不可变的 **原子事件日志 (Event Log)**。
-  - 日志文件示例：`EVENTS/1691234567_deviceA_add_bookmark_UUID.json`。
-  - Git 的推送和拉取永远只涉及 **新增独立文件**，从物理层面彻底消灭了 Git 冲突。
-  - 各设备客户端拉取到新的远程日志后，在本地的 SQLite 数据库中按时间序回放（Replay），重算本地最终的书签状态树。
+## 3. 数据模型
 
-## 3. 核心数据模型
+- `bookmarks`：书签主表（含 canonical_url、host、软删除标记）
+- `folders` / `folder_bookmarks`：文件夹及归属关系
+- `tags` / `bookmark_tags`：标签及归属关系
+- `app_settings`：应用配置（自动同步、主题、背景图等）
+- `applied_event_ids`：事件幂等去重
 
-### 3.1 本地 SQLite Schema 概念
-- `bookmarks`: 存储清洗完毕后的基础属性 (URL, Title, Description, Favicon, Host)。
-- `tags` / `folders`: 存储目录树关系、标签定义。
-- `bookmark_tags`: 维护书签与标签的多对多关系实体。
-- `event_cursors`: 记录本地设备已成功消费/回放的 Event Log 指针。
+核心约束：
 
-### 3.2 唯一性与清洗规则
-- **参数剥离**：录入所有 URL 时，系统内置规则库，自动剥离基于 Tracking 目的的垃圾 Query 参数（如 `utm_source`, `ref`）。
-- **去重逻辑**：同一份 Canonical URL 在本系统中只保留一条核心记录。如果一个用户在浏览器 A 将该链接收入“工作”目录，在浏览器 B 收入“未读”标签，本应用会在内部执行挂载映射合并，而不是创建两份记录。
+- 同一 canonical URL 去重
+- 事件回放幂等（重复事件不会重复应用）
 
-## 4. 安全与权限控制策略
-- 提供给 Git Client 同步所需使用的 Github Token（Personal Access Token 或 SSH Key），绝说明文写入系统配置文件。
-- 强制规定使用操作系统自带的安全机制（macOS Keychain / Windows Credential Manager）加密存储敏感鉴权凭证。
+## 4. 同步机制
+
+### 4.1 浏览器 -> App
+
+- 手动导入：`import_browser_bookmarks`
+- 自动导入：
+  - 启动时自动导入（可配置）
+  - 定时导入（可配置分钟）
+
+### 4.2 App -> Git（事件增量）
+
+- Pull：从 Git 仓库拉取 `events/events.ndjson`，逐行回放
+- Push：将本地事件文件同步到仓库并提交推送
+- 命令：
+  - `sync_event_pull_only`
+  - `sync_event_push_only`
+  - `sync_github_incremental`（pull + push）
+
+### 4.3 自动策略
+
+- 启动自动 Pull（可配置）
+- 定时事件同步（默认 5 分钟，可配置）
+- 关闭应用自动 Push（可配置）
+- 失败补偿：关闭 Push 失败会记录 pending，下次启动 Pull 后补偿 Push
+- 并发控制：前端防重入 + 后端 `sync_lock` 互斥
+
+## 5. 设置系统
+
+统一配置保存在 `app_settings`：
+
+- 浏览器自动同步配置
+- 事件自动同步配置
+- Git 仓库目录配置
+- 删除是否回写浏览器配置
+- 外观配置（主题模式、背景图、遮罩强度）
+
+## 6. UI 设计实现
+
+- 主题：`light / dark / system`
+- 背景图：开启、清除、遮罩强度
+- 语义化样式体系：
+  - 按钮：`btn-*`
+  - 导航：`nav-*`
+  - 标签：`tag-*`
+  - 卡片：`bookmark-*`
+  - 输入与面板：`input-*` / `panel-*`
+
+## 7. 已知边界
+
+- Git 同步依赖用户指定目录为有效 Git 仓库
+- 背景图当前以 data URL 存本地设置，体积较大时会增大数据库
