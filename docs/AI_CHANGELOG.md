@@ -63,3 +63,13 @@
 - `bookmark-sync-app/src-tauri/icons/ios/`
 - `docs/icon-preview/`
 ----------------------------------------
+## [2026-03-02 11:39] [Feature]
+- **Change**: 为 Github Actions 添加 browser-extension 的 ZIP 打包及 Release 资产上传流程。
+- **Risk Analysis**: 低风险；仅为构建发布增补附件
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `.github/workflows/release.yml`
+- `docs/icon-preview/icon-macos-neumorph-enamel-cloud-bookmark.png`
+- `docs/icon-preview/icon-macos-neumorph-glass-cloud-bookmark.png`
+- `docs/icon-preview/icon-macos-neumorph-metal-cloud-bookmark.png`
+----------------------------------------

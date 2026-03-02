@@ -49,3 +49,19 @@ jobs:
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
+
+      - name: Package Browser Extension (Ubuntu Only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          cd browser-extension
+          zip -r ../bookmark-sync-extension-${{ github.ref_name }}.zip ./*
+          cd ..
+
+      - name: Upload Browser Extension to Release
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bookmark-sync-extension-${{ github.ref_name }}.zip
+          tag_name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
