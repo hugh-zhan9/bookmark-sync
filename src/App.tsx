@@ -336,7 +336,7 @@ function App() {
       setGitRepoDir(repoDir);
 
       if (settings.startup_enabled) {
-        await importBrowserBookmarks(false);
+        importBrowserBookmarks(false).catch(console.error);
       }
 
       const eventSettings = await invoke<EventAutoSyncSettings>("get_event_auto_sync_settings");
@@ -345,12 +345,9 @@ function App() {
       setEventSyncIntervalMinutes(eventSettings.interval_minutes || 5);
       setEventSyncClosePushEnabled(eventSettings.close_push_enabled);
       if (eventSettings.startup_pull_enabled) {
-        try {
-          await invoke("sync_event_pull_only");
-          await refreshData();
-        } catch (e) {
-          console.error(e);
-        }
+        invoke("sync_event_pull_only")
+          .then(() => refreshData())
+          .catch(console.error);
       }
     } catch (e) {
       console.error(e);

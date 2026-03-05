@@ -623,39 +623,62 @@ fn create_folder(state: State<'_, DbState>, name: String, parent_id: Option<Stri
 }
 
 #[tauri::command]
-fn import_browser_bookmarks(state: State<'_, DbState>) -> Result<usize, String> {
+async fn import_browser_bookmarks(state: State<'_, DbState>) -> Result<usize, String> {
     let nodes = browser_scanner::scan_all_nodes();
     let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
     let mut count = 0;
+    
+    // Begin a transaction to vastly improve insert performance.
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    
+    let mut events_to_replay = Vec::new();
+    let mut folder_bookmarks = Vec::new();
+    
     for n in nodes {
         let stable_id = format!("{}-{}", n.browser.to_lowercase(), n.original_id);
         let stable_parent_id = n.parent_original_id.map(|pid| format!("{}-{}", n.browser.to_lowercase(), pid));
         if n.is_folder {
-            if is_folder_logically_deleted_by_id(&conn, &stable_id)? {
+            if is_folder_logically_deleted_by_id(&tx, &stable_id)? {
                 continue;
             }
             let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: format!("{}_import", n.browser), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::FolderAdded { id: stable_id, parent_id: stable_parent_id, name: n.title } };
-            let _ = replay_events(&mut conn, vec![event]);
+            // Since replay_events appends the event log, it might be better handled later, but we apply it to tx
+            if crate::db::apply_event_if_new(&tx, &event).unwrap_or(false) {
+                events_to_replay.push(event);
+            }
         } else {
             let url = cleaner::clean_url(&n.url.unwrap_or_default());
             if url.is_empty() { continue; }
-            if is_bookmark_logically_deleted_by_canonical_url(&conn, &url)? {
+            if is_bookmark_logically_deleted_by_canonical_url(&tx, &url)? {
                 continue;
             }
             let payload = BookmarkPayload { id: stable_id.clone(), url: url.clone(), title: Some(n.title), description: None, favicon_url: None, host: url::Url::parse(&url).ok().and_then(|u| u.host_str().map(|h| h.to_string())), created_at: chrono::Utc::now().to_rfc3339(), tags: None };
             let event = EventLog { event_id: uuid::Uuid::new_v4().to_string(), device_id: format!("{}_import", n.browser), timestamp: chrono::Utc::now().timestamp_millis(), event: SyncEvent::BookmarkAdded(payload) };
-            if replay_events(&mut conn, vec![event]).is_ok() {
+            if crate::db::apply_event_if_new(&tx, &event).unwrap_or(false) {
+                events_to_replay.push(event);
                 if let Some(fid) = stable_parent_id {
-                    let actual_bookmark_id = resolve_bookmark_id_for_url(&conn, &url, &stable_id);
-                    let _ = conn.execute(
-                        "INSERT INTO folder_bookmarks (folder_id, bookmark_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
-                        params![fid, actual_bookmark_id],
-                    );
+                    let actual_bookmark_id = resolve_bookmark_id_for_url(&tx, &url, &stable_id);
+                    folder_bookmarks.push((fid, actual_bookmark_id));
                 }
                 count += 1;
             }
         }
     }
+    
+    for (fid, actual_bookmark_id) in folder_bookmarks {
+        let _ = tx.execute(
+            "INSERT INTO folder_bookmarks (folder_id, bookmark_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+            params![fid, actual_bookmark_id],
+        );
+    }
+    
+    tx.commit().map_err(|e| e.to_string())?;
+
+    // Append to ndjson file afterwards to avoid file I/O within SQLite TX
+    if !events_to_replay.is_empty() {
+        crate::events::append_events_to_local_log(&conn, &events_to_replay)?;
+    }
+    
     Ok(count)
 }
 

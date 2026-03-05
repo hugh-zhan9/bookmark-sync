@@ -8,7 +8,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 
-fn append_events_to_local_log(conn: &Connection, logs: &[EventLog]) -> Result<(), String> {
+pub fn append_events_to_local_log(conn: &Connection, logs: &[EventLog]) -> Result<(), String> {
     if logs.is_empty() {
         return Ok(());
     }

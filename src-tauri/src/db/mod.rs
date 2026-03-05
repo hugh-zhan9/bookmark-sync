@@ -19,7 +19,7 @@ pub fn init_db(app_dir: PathBuf) -> Result<Connection> {
     Ok(conn)
 }
 
-pub fn apply_event(conn: &mut Connection, log: &EventLog) -> Result<(), String> {
+pub fn apply_event(conn: &Connection, log: &EventLog) -> Result<(), String> {
     match &log.event {
         SyncEvent::BookmarkAdded(b) => {
             conn.execute(
@@ -96,7 +96,7 @@ pub fn apply_event(conn: &mut Connection, log: &EventLog) -> Result<(), String> 
     Ok(())
 }
 
-pub fn apply_event_if_new(conn: &mut Connection, log: &EventLog) -> Result<bool, String> {
+pub fn apply_event_if_new(conn: &Connection, log: &EventLog) -> Result<bool, String> {
     let inserted = conn
         .execute(
             "INSERT INTO applied_event_ids (event_id) VALUES (?1) ON CONFLICT(event_id) DO NOTHING",
