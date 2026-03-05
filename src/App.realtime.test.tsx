@@ -5,7 +5,7 @@ import App from './App';
 
 const { invokeMock, listenMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(async () => []),
-  listenMock: vi.fn(async () => () => {}),
+  listenMock: vi.fn(async () => () => { }),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -20,12 +20,22 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
   openUrl: vi.fn(),
 }));
 
+vi.mock('./components/ResizableLayout', () => ({
+  ResizableLayout: ({ sidebar, list, preview }: any) => (
+    <div>
+      <div>{sidebar}</div>
+      <div>{list}</div>
+      <div>{preview}</div>
+    </div>
+  ),
+}));
+
 describe('App realtime refresh', () => {
   beforeEach(() => {
     invokeMock.mockReset();
     listenMock.mockReset();
     invokeMock.mockResolvedValue([]);
-    listenMock.mockResolvedValue(() => {});
+    listenMock.mockResolvedValue(() => { });
   });
 
   afterEach(() => {

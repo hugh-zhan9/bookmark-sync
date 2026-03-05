@@ -1,11 +1,22 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bookmark } from "./components/BookmarkItem";
-import { Folder, Tag, Sidebar } from "./components/Sidebar";
-import { BookmarkList } from "./components/BookmarkList";
-import { PreviewPane } from "./components/PreviewPane";
-import { ResizableLayout } from "./components/ResizableLayout";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import "./App.css";
+
+interface Bookmark {
+  id: string;
+  url: string;
+  title?: string;
+  description?: string;
+  favicon_url?: string;
+  host?: string;
+  created_at: string;
+  tags?: string[];
+}
+
+interface Folder { id: string; parent_id: string | null; name: string; }
+interface Tag { id: string; name: string; }
 interface EventAutoSyncSettings {
   startup_pull_enabled: boolean;
   interval_enabled: boolean;
@@ -25,12 +36,12 @@ interface BookmarkExistsResult {
 }
 
 function App() {
-  const [selectedBookmarkId, setSelectedBookmarkId] = useState<string | null>(null);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedTagId, setSelectedFolderTagId] = useState<string | null>(null);
+  
   const [newUrl, setNewUrl] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -110,19 +121,6 @@ function App() {
     return () => clearInterval(timer);
   }, [eventSyncIntervalEnabled, eventSyncIntervalMinutes]);
 
-  // 按 ESC 关闭所有模态框
-  useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (showSettings) { setShowSettings(false); return; }
-      if (addingTagToId) { setAddingTagToId(null); return; }
-      if (editingBookmark) { setEditingBookmark(null); return; }
-      if (showNewFolder) { setShowNewFolder(false); return; }
-    };
-    window.addEventListener("keydown", handleEsc);
-    return () => window.removeEventListener("keydown", handleEsc);
-  }, [showSettings, addingTagToId, editingBookmark, showNewFolder]);
-
   useEffect(() => {
     if (themeMode !== "system") {
       setResolvedTheme(themeMode);
@@ -199,7 +197,7 @@ function App() {
 
   async function handleDeleteFolder(e: React.MouseEvent, id: string) {
     e.stopPropagation();
-    try { await invoke("write_debug_log", { message: `handleDeleteFolder click id=${id}` }); } catch { }
+    try { await invoke("write_debug_log", { message: `handleDeleteFolder click id=${id}` }); } catch {}
     try {
       await invoke("write_debug_log", { message: `handleDeleteFolder invoke id=${id}` });
       await invoke("delete_folder", { id });
@@ -209,7 +207,7 @@ function App() {
       refreshData();
       await invoke("write_debug_log", { message: `handleDeleteFolder success id=${id}` });
     } catch (e) {
-      try { await invoke("write_debug_log", { message: `handleDeleteFolder error id=${id} err=${String(e)}` }); } catch { }
+      try { await invoke("write_debug_log", { message: `handleDeleteFolder error id=${id} err=${String(e)}` }); } catch {}
       alert(e);
     }
   }
@@ -281,6 +279,15 @@ function App() {
     const tagName = newTagText.trim();
     if (!addingTagToId || !tagName) return;
     try { await invoke("add_tag_to_bookmark", { bookmarkId: addingTagToId, tagName }); setAddingTagToId(null); setNewTagText(""); refreshData(); } catch (e) { alert(e); }
+  }
+
+  async function openBookmarkInDefaultBrowser(url: string) {
+    try {
+      await openUrl(url);
+    } catch (e) {
+      console.error(e);
+      alert(`打开链接失败：${String(e)}`);
+    }
   }
 
   async function importBrowserBookmarks(showAlert: boolean) {
@@ -478,7 +485,7 @@ function App() {
   }
 
   async function beginEditBookmark(bm: Bookmark) {
-    setEditingBookmark(bm);
+      setEditingBookmark(bm);
     const currentTags = bm.tags ?? [];
     setOriginalEditingTags(currentTags);
     setEditingTagsText(currentTags.join(", "));
@@ -515,101 +522,140 @@ function App() {
     return out;
   }
 
-  // ── 稳定回调（useCallback）────────────────────────────────────────────
-  // 这些回调引用稳定后，React.memo 包裹的三个面板才真正不会在无关 state 变化时重渲染。
-
-  const handleSelectAll = useCallback(() => {
-    setSelectedFolderId(null);
-    setSelectedFolderTagId(null);
-    setSearchQuery("");
-    setSelectedBookmarkId(null);
-  }, []);
-
-  const handleSelectFolder = useCallback((id: string) => {
-    setSelectedFolderId(id);
-    setSelectedFolderTagId(null);
-    setSearchQuery("");
-    setSelectedBookmarkId(null);
-  }, []);
-
-  const handleSelectTag = useCallback((id: string) => {
-    setSelectedFolderTagId(id);
-    setSelectedFolderId(null);
-    setSearchQuery("");
-    setSelectedBookmarkId(null);
-  }, []);
-
-  const handleNewFolder = useCallback(() => setShowNewFolder(true), []);
-
-  const handleOpenSettings = useCallback(() => setShowSettings(true), []);
-
-  // 注意：此处 handleRenameFolder 已被同名函数（form submit handler）占用，
-  // Sidebar 需要的是「开始重命名」，用不同命名区分。
-  const handleStartRenameFolder = useCallback((f: Folder) => {
-    setRenamingFolder(f);
-    setRenameFolderName(f.name);
-  }, []);
-
-  const handleSelectBookmark = useCallback((bm: Bookmark) => {
-    setSelectedBookmarkId(bm.id);
-  }, []);
-
-  const handleAddTag_ = useCallback((id: string) => {
-    setAddingTagToId(id);
-  }, []);
-
-  const handleClosePreview = useCallback(() => setSelectedBookmarkId(null), []);
-
   return (
     <div data-theme={resolvedTheme} className={`app-root theme-${resolvedTheme} relative flex h-screen font-sans overflow-hidden`}>
       {backgroundEnabled && backgroundImageDataUrl && (
         <div className="app-bg-image" style={{ backgroundImage: `url(${backgroundImageDataUrl})` }} />
       )}
       <div className="app-bg-overlay" style={{ opacity: backgroundEnabled && backgroundImageDataUrl ? backgroundOverlayOpacity / 100 : 0 }} />
-      {/* Main Layout - 原生三栏可拖拽布局 */}
-      <ResizableLayout
-        sidebar={
-          <Sidebar
-            folders={folders}
-            tags={tags}
-            selectedFolderId={selectedFolderId}
-            selectedTagId={selectedTagId}
-            searchQuery={searchQuery}
-            importing={importing}
-            onSelectAll={handleSelectAll}
-            onSelectFolder={handleSelectFolder}
-            onSelectTag={handleSelectTag}
-            onSearch={setSearchQuery}
-            onImport={handleImport}
-            onNewFolder={handleNewFolder}
-            onDeleteFolder={handleDeleteFolder}
-            onRenameFolder={handleStartRenameFolder}
-            onOpenSettings={handleOpenSettings}
-          />
-        }
-        list={
-          <BookmarkList
-            bookmarks={bookmarks}
-            newUrl={newUrl}
-            loading={loading}
-            searchQuery={searchQuery}
-            selectedBookmarkId={selectedBookmarkId}
-            onNewUrlChange={setNewUrl}
-            onSearchQueryChange={setSearchQuery}
-            onAddBookmark={handleAddBookmark}
-            onSelectBookmark={handleSelectBookmark}
-            onAddTag={handleAddTag_}
-            onEdit={beginEditBookmark}
-            onDelete={handleDeleteBookmark}
-          />
-        }
-        preview={
-          <PreviewPane
-            bookmark={bookmarks.find(b => b.id === selectedBookmarkId) || null}
-            onClose={handleClosePreview}
-          />
-        }
-      />
+      {/* Sidebar */}
+      <aside className="relative z-10 w-64 border-r border-neutral-800 bg-neutral-950 flex flex-col shadow-2xl">
+        <div className="p-8 border-b border-neutral-800">
+          <h1 className="logo-text text-4xl text-white tracking-widest text-center">拾页</h1>
+          <p className="text-[10px] text-center text-neutral-500 mt-2 tracking-widest uppercase opacity-50">Local First</p>
+        </div>
+        
+        <nav className="flex-1 overflow-y-auto p-4 space-y-1 scrollbar-hide">
+          <button 
+            onClick={() => { setSelectedFolderId(null); setSelectedFolderTagId(null); setSearchQuery(""); }}
+            className={`nav-item ${!selectedFolderId && !selectedTagId && !searchQuery ? "nav-item-active" : ""}`}
+          >
+            🏠 全部书签
+          </button>
+          
+          <div className="flex justify-between items-center pt-6 pb-2 px-4">
+            <div className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">文件夹</div>
+            <button onClick={() => setShowNewFolder(true)} className="text-neutral-500 hover:text-white transition-colors">＋</button>
+          </div>
+          {folders.map(f => (
+            <div key={f.id} onClick={() => { setSelectedFolderId(f.id); setSelectedFolderTagId(null); setSearchQuery(""); }}
+              className={`group nav-item flex items-center justify-between cursor-pointer ${selectedFolderId === f.id ? "nav-item-active font-medium" : ""}`}>
+              <span className="truncate flex-1 flex items-center gap-2">
+                <span className="opacity-50">📁</span> {f.name}
+              </span>
+              <div className="opacity-100 transition-all duration-200 flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="重命名文件夹"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setRenamingFolder(f);
+                  setRenameFolderName(f.name);
+                }}
+                title="重命名文件夹"
+                className="p-1.5 rounded-lg hover:bg-neutral-700/50 hover:text-white text-neutral-500"
+              >
+                ✏️
+              </button>
+              <button
+                type="button"
+                aria-label="删除文件夹"
+                onClick={(e) => handleDeleteFolder(e, f.id)} 
+                title="删除文件夹"
+                className="p-1.5 rounded-lg hover:bg-red-500/20 hover:text-red-500 transition-all duration-200 text-neutral-500"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+              </button>
+              </div>
+            </div>
+          ))}
+
+
+          <div className="pt-6 pb-2 px-4 text-[10px] font-bold text-neutral-500 uppercase tracking-widest">标签</div>
+          <div className="flex flex-wrap gap-1 px-3">
+            {tags.map(t => (
+              <button key={t.id} onClick={() => { setSelectedFolderTagId(t.id); setSelectedFolderId(null); setSearchQuery(""); }}
+                className={`tag-item ${selectedTagId === t.id ? "tag-item-active" : "tag-item-inactive"}`}>
+                # {t.name}
+              </button>
+            ))}
+          </div>
+        </nav>
+
+        <div className="p-6 border-t border-neutral-800 space-y-3 bg-neutral-950/50">
+          <button onClick={handleImport} disabled={importing} className="btn-base btn-neutral w-full py-3">
+            {importing ? "同步中..." : "📥 同步本地浏览器"}
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+        <main className="relative z-10 flex-1 flex flex-col overflow-hidden bg-gradient-to-br from-neutral-900 to-black">
+        <header className="p-6 border-b border-neutral-800/50 flex gap-4 items-center bg-neutral-900/30 backdrop-blur-xl sticky top-0 z-10">
+          <div className="flex-1 relative text-white">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500">🔍</span>
+            <input type="text" placeholder="搜索标题、域名或标签..." className="input-field input-field-leading"
+              value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+          </div>
+          <form className="flex-[1.1] flex gap-3" onSubmit={handleAddBookmark}>
+            <input
+              type="url"
+              placeholder="粘贴 URL 快速添加书签..."
+              className="input-field flex-1"
+              value={newUrl}
+              onChange={e => setNewUrl(e.target.value)}
+              required
+            />
+            <button disabled={loading} className="btn-base btn-accent px-6 py-3 text-sm rounded-2xl">
+              {loading ? "..." : "添加"}
+            </button>
+          </form>
+            <button aria-label="打开设置" onClick={() => setShowSettings(true)} className="btn-base btn-neutral w-10 h-10 p-0 flex items-center justify-center text-xl">⚙️</button>
+          </header>
+
+        <div className="flex-1 overflow-y-auto p-8 scrollbar-hide">
+          <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-6">
+            {bookmarks.map(bm => (
+              <div key={bm.id} className="group bookmark-card flex flex-col">
+                <div className="flex gap-2.5 items-start">
+                  <div className="w-9 h-9 rounded-xl bg-neutral-950 border border-neutral-800 flex items-center justify-center shrink-0 overflow-hidden shadow-inner">
+                    {bm.favicon_url ? <img src={bm.favicon_url} className="w-4 h-4 object-contain" alt="" /> : <span className="text-sm font-bold text-neutral-800 uppercase">{bm.host?.charAt(0) || "?"}</span>}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3
+                      className="bookmark-title font-semibold truncate mb-0.5 transition-colors cursor-pointer text-sm"
+                      onDoubleClick={() => openBookmarkInDefaultBrowser(bm.url)}
+                    >
+                      {bm.title || bm.url}
+                    </h3>
+                    <p className="text-[11px] text-neutral-600 truncate font-medium mb-1">{bm.host}</p>
+                    <div className="flex flex-wrap gap-1">
+                      {bm.tags?.map(t => <span key={t} className="token-chip">#{t}</span>)}
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="flex gap-2 absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-all">
+                  <button aria-label={`新增标签-${bm.title || bm.url}`} onClick={() => setAddingTagToId(bm.id)} className="btn-base btn-neutral btn-icon">＋</button>
+                  <button aria-label={`编辑书签-${bm.title || bm.url}`} onClick={() => beginEditBookmark(bm)} className="btn-base btn-neutral btn-icon">✏️</button>
+                  <button onClick={() => handleDeleteBookmark(bm.id)} className="btn-base btn-danger btn-icon">🗑️</button>
+                </div>
+
+              </div>
+            ))}
+          </div>
+        </div>
+      </main>
 
       {/* Tag Modal */}
       {addingTagToId && (
@@ -637,12 +683,12 @@ function App() {
               <div className="space-y-2 text-white">
                 <label className="text-[10px] text-neutral-500 uppercase tracking-widest font-black ml-1">标题</label>
                 <input className="input-field px-5 py-4"
-                  value={editingBookmark.title || ""} onChange={e => setEditingBookmark({ ...editingBookmark, title: e.target.value })} />
+                  value={editingBookmark.title || ""} onChange={e => setEditingBookmark({...editingBookmark, title: e.target.value})} />
               </div>
               <div className="space-y-2 text-white">
                 <label className="text-[10px] text-neutral-500 uppercase tracking-widest font-black ml-1">网址</label>
                 <input className="input-field px-5 py-4"
-                  value={editingBookmark.url} onChange={e => setEditingBookmark({ ...editingBookmark, url: e.target.value })} />
+                  value={editingBookmark.url} onChange={e => setEditingBookmark({...editingBookmark, url: e.target.value})} />
               </div>
               <div className="space-y-2 text-white">
                 <label htmlFor="edit-folders-input" className="text-[10px] text-neutral-500 uppercase tracking-widest font-black ml-1">所属文件夹（逗号分隔）</label>
@@ -729,24 +775,9 @@ function App() {
       )}
 
       {showSettings && (
-        <div
-          className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-start justify-center z-50 p-6 overflow-y-auto"
-          onClick={() => setShowSettings(false)}
-        >
-          <div
-            className="panel-shell w-full max-w-lg rounded-[3rem] p-12 max-h-[90vh] overflow-y-auto my-auto"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-2xl font-bold text-white logo-text tracking-widest">设置</h2>
-              <button
-                onClick={() => setShowSettings(false)}
-                className="w-9 h-9 flex items-center justify-center rounded-xl bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors text-lg"
-                aria-label="关闭设置"
-              >
-                ✕
-              </button>
-            </div>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-start justify-center z-50 p-6 overflow-y-auto">
+          <div className="panel-shell w-full max-w-lg rounded-[3rem] p-12 max-h-[90vh] overflow-y-auto my-auto">
+            <h2 className="text-2xl font-bold text-white mb-8 logo-text tracking-widest">设置</h2>
             <div className="space-y-6">
               <div className="panel-section space-y-4">
                 <label className="block text-[10px] text-neutral-500 uppercase tracking-widest font-black">主题与背景</label>
@@ -881,7 +912,6 @@ function App() {
                       try {
                         const branch = await invoke<string>("set_git_sync_repo_dir", { repoDir: gitRepoDir });
                         alert(`已保存 Git 仓库目录，当前分支：${branch}`);
-                        setShowSettings(false);
                       } catch (e) { alert(e); }
                     }}
                     className="btn-base btn-neutral"

@@ -768,3 +768,18 @@
 - `.github/workflows/release.yml`
 - `docs/AI_CHANGELOG.md`
 ----------------------------------------
+## [2026-03-05 14:05] [Refactor]
+- **Change**: 重构 App UI 为左寻找(文件夹)-中(书签)-右(预览)的三栏式拖拽布局，拆分提取了 Sidebar, BookmarkList, BookmarkItem, PreviewPane 组件，引入 react-resizable-panels，当遇到 iframe 跨域限制时优雅降级为 Metadata 卡片展示，并利用 Tailwind 重写了组件的现代化界面（包含语义化按钮类与图标更新）。
+- **Risk Analysis**: 界面结构经历了大规模提取与改动，原有 `App.tsx` 中的事件处理下放到了子组件中。主要风险是状态更新遗漏和布局在极端窗口尺寸下的表现；由于使用了 react-resizable-panels，需要注意 ResizeObserver 的兼容性。测试用例已同步修正并全部通过（19/19）。
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src/App.tsx`
+- `src/App.test.tsx`
+- `src/App.realtime.test.tsx`
+- `src/components/Sidebar.tsx`
+- `src/components/BookmarkList.tsx`
+- `src/components/BookmarkItem.tsx`
+- `src/components/PreviewPane.tsx`
+- `package.json`
+- `docs/AI_CHANGELOG.md`
+----------------------------------------

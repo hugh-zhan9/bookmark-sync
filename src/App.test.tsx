@@ -13,11 +13,21 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(async () => () => {}),
+  listen: vi.fn(async () => () => { }),
 }));
 
 vi.mock('@tauri-apps/plugin-opener', () => ({
   openUrl: openUrlMock,
+}));
+
+vi.mock('./components/ResizableLayout', () => ({
+  ResizableLayout: ({ sidebar, list, preview }: any) => (
+    <div>
+      <div>{sidebar}</div>
+      <div>{list}</div>
+      <div>{preview}</div>
+    </div>
+  ),
 }));
 
 describe('App bookmark management', () => {
@@ -268,7 +278,7 @@ describe('App bookmark management', () => {
         }
         if (cmd === 'import_browser_bookmarks') {
           importCallCount += 1;
-          return new Promise(() => {});
+          return new Promise(() => { });
         }
         return Promise.resolve(null);
       });
@@ -321,7 +331,7 @@ describe('App bookmark management', () => {
     render(<App />);
     const addButton = await screen.findByRole('button', { name: '添加' });
     expect(addButton.className).toContain('btn-accent');
-    const deleteButtons = await screen.findAllByRole('button', { name: '🗑️' });
+    const deleteButtons = await screen.findAllByRole('button', { name: '删除书签' });
     expect(deleteButtons[0].className).toContain('btn-danger');
   });
 
@@ -375,7 +385,7 @@ describe('App bookmark management', () => {
   });
 
   it('添加已存在网址时应提示并且不再调用 add_bookmark', async () => {
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => { });
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === 'get_folders') return [];
       if (cmd === 'get_tags') return [];
