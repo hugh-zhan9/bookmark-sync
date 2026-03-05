@@ -32,7 +32,7 @@ export const BookmarkList = memo(function BookmarkList({
 }: BookmarkListProps) {
     return (
         <div className="flex-1 flex flex-col h-full bg-neutral-950 overflow-hidden relative border-r border-neutral-800">
-            <header className="p-5 border-b border-neutral-800/80 bg-neutral-950/60 backdrop-blur-xl z-20 shrink-0">
+            <header className="p-5 border-b border-neutral-800/80 bg-neutral-950/50 backdrop-blur-xl z-20 shrink-0">
                 <div className="flex gap-4">
                     <div className="w-1/3 relative text-white">
                         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500">🔍</span>

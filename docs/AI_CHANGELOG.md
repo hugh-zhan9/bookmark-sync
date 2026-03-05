@@ -793,3 +793,11 @@
 - `src-tauri/src/lib.rs`
 - `src/App.tsx`
 ----------------------------------------
+## [2026-03-05 16:26] [style(ui)]
+- **Change**: 统一书签列表左右栏背景颜色
+- **Risk Analysis**: 低
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `src/components/BookmarkItem.tsx`
+- `src/components/BookmarkList.tsx`
+----------------------------------------

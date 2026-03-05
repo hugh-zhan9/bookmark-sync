@@ -34,7 +34,7 @@ export const BookmarkItem = memo(function BookmarkItem({ bm, isSelected, onSelec
     return (
         <div
             onClick={() => onSelect(bm)}
-            className={`group flex flex-col p-4 rounded-2xl cursor-pointer transition-all border ${isSelected ? 'bg-neutral-800/80 border-neutral-600 shadow-md transform scale-[1.01]' : 'bg-neutral-950/40 border-neutral-800 hover:bg-neutral-800/60 hover:border-neutral-700'}`}
+            className={`group bookmark-card flex flex-col cursor-pointer ${isSelected ? 'bg-blue-900/20 border-blue-500/50 shadow-md transform scale-[1.01]' : ''}`}
         >
             <div className="flex gap-3 items-start relative">
                 <div className="w-10 h-10 rounded-xl bg-neutral-950 border border-neutral-800 flex items-center justify-center shrink-0 overflow-hidden shadow-inner mt-1">
@@ -58,7 +58,7 @@ export const BookmarkItem = memo(function BookmarkItem({ bm, isSelected, onSelec
                     </div>
                 </div>
 
-                <div className="flex gap-1.5 absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-all bg-linear-to-l from-neutral-950 via-neutral-950/80 to-transparent pl-6">
+                <div className="flex gap-1.5 absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-all bg-linear-to-l from-neutral-900 via-neutral-900/80 to-transparent pl-6">
                     <button aria-label={`新增标签-${bm.title || bm.url}`} onClick={(e) => { e.stopPropagation(); onAddTag(bm.id); }} className="btn-icon p-1.5 rounded-lg bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700 transition">＋</button>
                     <button aria-label={`编辑书签-${bm.title || bm.url}`} onClick={(e) => { e.stopPropagation(); onEdit(bm); }} className="btn-icon p-1.5 rounded-lg bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700 transition">✏️</button>
                     <button aria-label="删除书签" onClick={(e) => { e.stopPropagation(); onDelete(bm.id); }} className="btn-icon btn-danger p-1.5 rounded-lg bg-neutral-800 text-neutral-400 hover:text-red-400 hover:bg-red-950/50 transition">🗑️</button>
