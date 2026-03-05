@@ -809,3 +809,10 @@
 - `src/components/BookmarkItem.tsx`
 - `src/components/BookmarkList.tsx`
 ----------------------------------------
+## [2026-03-05 16:39] [fix(close)]
+- **Change**: 修复关闭窗口时卡顿问题，改为异步后台同步再退出
+- **Risk Analysis**: 低
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `src-tauri/src/lib.rs`
+----------------------------------------
