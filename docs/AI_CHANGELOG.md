@@ -783,3 +783,13 @@
 - `package.json`
 - `docs/AI_CHANGELOG.md`
 ----------------------------------------
+## [2026-03-05 16:19] [fix]
+- **Change**: 优化启动同步性能，将 importBrowserBookmarks 和 sync_event_pull_only 变为后台异步非阻塞执行，并用 SQLite Transaction 包裹写入操作以防卡死
+- **Risk Analysis**: 低
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `src-tauri/src/db/mod.rs`
+- `src-tauri/src/events/mod.rs`
+- `src-tauri/src/lib.rs`
+- `src/App.tsx`
+----------------------------------------
