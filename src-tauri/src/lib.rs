@@ -1005,43 +1005,53 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                let state = window.state::<DbState>();
-                let sync_lock_result = state.sync_lock.lock();
-                if let Ok(sync_guard) = sync_lock_result {
-                    let context = if let Ok(conn) = state.conn.lock() {
-                        let close_push_enabled = get_setting(&conn, "event_sync_close_push")
-                            .map(|v| v == "1")
-                            .unwrap_or(true);
-                        if close_push_enabled {
-                            get_setting(&conn, "git_sync_repo_dir")
-                                .map(|repo_dir| (repo_dir, local_events_path_from_conn(&conn)))
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // 阻止默认的立即关闭行为
+                api.prevent_close();
+                // 隐藏窗口给用户立即关闭的反馈
+                let _ = window.hide();
+                
+                let app_handle = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app_handle.state::<DbState>();
+                    let sync_lock_result = state.sync_lock.lock();
+                    if let Ok(sync_guard) = sync_lock_result {
+                        let context = if let Ok(conn) = state.conn.lock() {
+                            let close_push_enabled = get_setting(&conn, "event_sync_close_push")
+                                .map(|v| v == "1")
+                                .unwrap_or(true);
+                            if close_push_enabled {
+                                get_setting(&conn, "git_sync_repo_dir")
+                                    .map(|repo_dir| (repo_dir, local_events_path_from_conn(&conn)))
+                            } else {
+                                None
+                            }
                         } else {
                             None
-                        }
-                    } else {
-                        None
-                    };
+                        };
 
-                    if let Some((repo_dir, Ok(local_events_path))) = context {
-                        if sync::is_git_repo_dir(&repo_dir) {
-                            let push_result = sync_events_to_repo(&repo_dir, &local_events_path);
-                            if let Ok(conn) = state.conn.lock() {
-                                match push_result {
-                                    Ok(_) => {
-                                        let _ = mark_pending_push(&conn, false);
-                                        append_debug_log(&conn, "close push success");
-                                    }
-                                    Err(err) => {
-                                        let _ = mark_pending_push(&conn, true);
-                                        append_debug_log(&conn, &format!("close push failed: {err}"));
+                        if let Some((repo_dir, Ok(local_events_path))) = context {
+                            if sync::is_git_repo_dir(&repo_dir) {
+                                let push_result = sync_events_to_repo(&repo_dir, &local_events_path);
+                                if let Ok(conn) = state.conn.lock() {
+                                    match push_result {
+                                        Ok(_) => {
+                                            let _ = mark_pending_push(&conn, false);
+                                            append_debug_log(&conn, "close push success");
+                                        }
+                                        Err(err) => {
+                                            let _ = mark_pending_push(&conn, true);
+                                            append_debug_log(&conn, &format!("close push failed: {err}"));
+                                        }
                                     }
                                 }
                             }
                         }
+                        drop(sync_guard);
                     }
-                    drop(sync_guard);
-                }
+                    // 同步完成后真正退出应用
+                    app_handle.exit(0);
+                });
             }
         })
         .invoke_handler(tauri::generate_handler![

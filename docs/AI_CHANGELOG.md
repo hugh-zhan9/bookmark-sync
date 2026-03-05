@@ -801,3 +801,11 @@
 - `src/components/BookmarkItem.tsx`
 - `src/components/BookmarkList.tsx`
 ----------------------------------------
+## [2026-03-05 16:32] [style(ui)]
+- **Change**: 修复浅色模式下书签列表项背景过暗的问题
+- **Risk Analysis**: 低
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `src/components/BookmarkItem.tsx`
+- `src/components/BookmarkList.tsx`
+----------------------------------------
