@@ -4,14 +4,17 @@ pub mod sync;
 
 use std::sync::Mutex;
 use std::thread;
-use std::io::{Write, BufRead, BufReader};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::fs::{self, File};
+use std::fs;
 use tauri::{Emitter, Manager, State};
 use events::models::{BookmarkPayload, SyncEvent, EventLog};
 use events::replay_events;
 use events::cleaner;
 use events::metadata;
+use events::segment;
+use events::device_registry;
+use events::cleanup;
 use rusqlite::{params, params_from_iter};
 use db::browser_scanner;
 
@@ -33,6 +36,21 @@ fn append_debug_log(conn: &rusqlite::Connection, message: &str) {
             let _ = writeln!(f, "{line}");
         }
     }
+}
+
+fn append_debug_log_str(message: &str) {
+    let line = format!("[{}] {}", chrono::Utc::now().to_rfc3339(), message);
+    eprintln!("{line}");
+}
+
+/// 获取或创建本设备唯一标识（存储在 app_settings 中）
+fn get_or_create_device_id(conn: &rusqlite::Connection) -> String {
+    if let Some(id) = get_setting(conn, "device_id") {
+        return id;
+    }
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let _ = set_setting(conn, "device_id", &new_id);
+    new_id
 }
 
 fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
@@ -58,14 +76,14 @@ fn mark_pending_push(conn: &rusqlite::Connection, pending: bool) -> Result<(), S
     set_setting(conn, "event_sync_pending_push", if pending { "1" } else { "0" })
 }
 
-fn local_events_path_from_conn(conn: &rusqlite::Connection) -> Result<PathBuf, String> {
+fn app_dir_from_conn(conn: &rusqlite::Connection) -> Result<PathBuf, String> {
     let db_path = conn
         .path()
         .ok_or_else(|| "无法定位数据库路径".to_string())?;
     let app_dir = Path::new(db_path)
         .parent()
         .ok_or_else(|| "无法定位应用目录".to_string())?;
-    Ok(app_dir.join("events.ndjson"))
+    Ok(app_dir.to_path_buf())
 }
 
 fn tokenize_search_query(query: &str) -> Vec<String> {
@@ -744,12 +762,13 @@ fn set_git_sync_repo_dir(state: State<'_, DbState>, repo_dir: String) -> Result<
 #[tauri::command]
 fn sync_github_incremental(state: State<'_, DbState>) -> Result<(), String> {
     let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
-    let (repo_dir, local_events_path) = {
+    let (repo_dir, app_dir, device_id) = {
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
         let repo_dir = get_setting(&conn, "git_sync_repo_dir")
             .ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
-        let local_events_path = local_events_path_from_conn(&conn)?;
-        (repo_dir, local_events_path)
+        let app_dir = app_dir_from_conn(&conn)?;
+        let device_id = get_or_create_device_id(&conn);
+        (repo_dir, app_dir, device_id)
     };
     if !sync::is_git_repo_dir(&repo_dir) {
         return Err("Git 仓库目录无效".to_string());
@@ -761,7 +780,7 @@ fn sync_github_incremental(state: State<'_, DbState>) -> Result<(), String> {
         sync_events_from_repo(&mut conn, &repo_dir)?;
     }
 
-    match sync_events_to_repo(&repo_dir, &local_events_path) {
+    match sync_events_to_repo(&repo_dir, &app_dir, &device_id) {
         Ok(_) => {
             let conn = state.conn.lock().map_err(|e| e.to_string())?;
             mark_pending_push(&conn, false)?;
@@ -777,39 +796,85 @@ fn sync_github_incremental(state: State<'_, DbState>) -> Result<(), String> {
 
 fn sync_events_from_repo(conn: &mut rusqlite::Connection, repo_dir: &str) -> Result<(), String> {
     let events_dir = sync::ensure_events_dir(repo_dir)?;
-    let repo_events_path = events_dir.join("events.ndjson");
-    if !repo_events_path.exists() {
+    // 向后兼容：迁移旧版单文件
+    segment::migrate_legacy_if_exists(&events_dir)?;
+    // 从所有 segment 中读取事件（按 timestamp 升序）
+    let logs = segment::read_all_events(&events_dir)?;
+    if logs.is_empty() {
         return Ok(());
-    }
-    let f = File::open(&repo_events_path).map_err(|e| e.to_string())?;
-    let reader = BufReader::new(f);
-    let mut logs = Vec::new();
-    for line in reader.lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let log: EventLog = serde_json::from_str(&line).map_err(|e| e.to_string())?;
-        logs.push(log);
     }
     replay_events(conn, logs)?;
     Ok(())
 }
 
-fn sync_events_to_repo(repo_dir: &str, local_events_path: &Path) -> Result<(), String> {
+fn sync_events_to_repo(
+    repo_dir: &str,
+    app_dir: &Path,
+    device_id: &str,
+) -> Result<(), String> {
     let events_dir = sync::ensure_events_dir(repo_dir)?;
-    let repo_events_path = events_dir.join("events.ndjson");
-    if !local_events_path.exists() {
-        File::create(local_events_path).map_err(|e| e.to_string())?;
+    let devices_dir = events_dir.join("devices");
+    fs::create_dir_all(&devices_dir).map_err(|e| e.to_string())?;
+
+    // 向后兼容：迁移本地旧版单文件
+    segment::migrate_legacy_if_exists(app_dir)?;
+
+    // 向后兼容：repo 侧存在旧版 events.ndjson → 用 git rm 删除，改为 segment 模式
+    let repo_legacy = events_dir.join(segment::LEGACY_SEGMENT_NAME);
+    if repo_legacy.exists() {
+        // 将旧文件内容迁移为 events-000001.ndjson（先本地操作，不用 git）
+        let legacy_target = events_dir.join("events-000001.ndjson");
+        if !legacy_target.exists() {
+            fs::rename(&repo_legacy, &legacy_target).map_err(|e| e.to_string())?;
+        } else {
+            fs::remove_file(&repo_legacy).map_err(|e| e.to_string())?;
+        }
+        // 从 git 索引中删除旧文件
+        let _ = std::process::Command::new("git")
+            .args(["-C", repo_dir, "rm", "--cached", "--force",
+                   &format!("events/{}", segment::LEGACY_SEGMENT_NAME)])
+            .status();
     }
-    fs::copy(local_events_path, &repo_events_path).map_err(|e| e.to_string())?;
+
+    // 将本地所有 sealed segments 同步到 repo（只复制 repo 缺少的）
+    for seg in segment::list_sealed_segments(app_dir)? {
+        let name = seg.file_name().unwrap();
+        let repo_seg = events_dir.join(name);
+        if !repo_seg.exists() {
+            fs::copy(&seg, &repo_seg).map_err(|e| e.to_string())?;
+        }
+    }
+
+    // 将本地 current segment 的内容复制到 repo current segment
+    let local_current = app_dir.join(segment::CURRENT_SEGMENT_NAME);
+    if local_current.exists() {
+        let local_events = segment::read_events_from_file(&local_current)?;
+        if !local_events.is_empty() {
+            segment::append_to_current_segment(&events_dir, &local_events)?;
+        }
+    }
+
+    // 计算本地最大同步时间戳并更新设备注册表
+    let all_local = segment::read_all_events(app_dir)?;
+    let max_local_ts = all_local.iter().map(|e| e.timestamp).max().unwrap_or(0);
+    device_registry::update_device(&devices_dir, device_id, max_local_ts)?;
+
+    // 尝试清理所有设备已同步的旧 segment
+    let cleaned = cleanup::try_cleanup_old_segments(&events_dir, &devices_dir)
+        .unwrap_or(0);
+    if cleaned > 0 {
+        append_debug_log_str(&format!("sync_events_to_repo: cleaned {} old segments", cleaned));
+    }
+
+    // git add events/ 并提交推送（包括新 segment + 已 rm 的旧文件）
     sync::git_add_commit_push_current_branch(
         repo_dir,
-        "events/events.ndjson",
+        "events",
         &format!("sync events {}", chrono::Utc::now().to_rfc3339()),
     )?;
     Ok(())
 }
+
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct EventAutoSyncSettings {
@@ -871,15 +936,16 @@ fn set_event_auto_sync_settings(
 #[tauri::command]
 fn sync_event_pull_only(state: State<'_, DbState>) -> Result<(), String> {
     let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
-    let (repo_dir, pending_push, local_events_path) = {
+    let (repo_dir, pending_push, app_dir, device_id) = {
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
         let repo_dir = get_setting(&conn, "git_sync_repo_dir")
             .ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
         let pending_push = get_setting(&conn, "event_sync_pending_push")
             .map(|v| v == "1")
             .unwrap_or(false);
-        let local_events_path = local_events_path_from_conn(&conn)?;
-        (repo_dir, pending_push, local_events_path)
+        let app_dir = app_dir_from_conn(&conn)?;
+        let device_id = get_or_create_device_id(&conn);
+        (repo_dir, pending_push, app_dir, device_id)
     };
     if !sync::is_git_repo_dir(&repo_dir) {
         return Err("Git 仓库目录无效".to_string());
@@ -892,7 +958,7 @@ fn sync_event_pull_only(state: State<'_, DbState>) -> Result<(), String> {
     }
 
     if pending_push {
-        match sync_events_to_repo(&repo_dir, &local_events_path) {
+        match sync_events_to_repo(&repo_dir, &app_dir, &device_id) {
             Ok(_) => {
                 let conn = state.conn.lock().map_err(|e| e.to_string())?;
                 mark_pending_push(&conn, false)?;
@@ -910,17 +976,18 @@ fn sync_event_pull_only(state: State<'_, DbState>) -> Result<(), String> {
 #[tauri::command]
 fn sync_event_push_only(state: State<'_, DbState>) -> Result<(), String> {
     let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
-    let (repo_dir, local_events_path) = {
+    let (repo_dir, app_dir, device_id) = {
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
         let repo_dir = get_setting(&conn, "git_sync_repo_dir")
             .ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
-        let local_events_path = local_events_path_from_conn(&conn)?;
-        (repo_dir, local_events_path)
+        let app_dir = app_dir_from_conn(&conn)?;
+        let device_id = get_or_create_device_id(&conn);
+        (repo_dir, app_dir, device_id)
     };
     if !sync::is_git_repo_dir(&repo_dir) {
         return Err("Git 仓库目录无效".to_string());
     }
-    match sync_events_to_repo(&repo_dir, &local_events_path) {
+    match sync_events_to_repo(&repo_dir, &app_dir, &device_id) {
         Ok(_) => {
             let conn = state.conn.lock().map_err(|e| e.to_string())?;
             mark_pending_push(&conn, false)?;
@@ -1021,8 +1088,11 @@ pub fn run() {
                                 .map(|v| v == "1")
                                 .unwrap_or(true);
                             if close_push_enabled {
-                                get_setting(&conn, "git_sync_repo_dir")
-                                    .map(|repo_dir| (repo_dir, local_events_path_from_conn(&conn)))
+                                get_setting(&conn, "git_sync_repo_dir").map(|repo_dir| {
+                                    let app_dir = app_dir_from_conn(&conn);
+                                    let device_id = get_or_create_device_id(&conn);
+                                    (repo_dir, app_dir, device_id)
+                                })
                             } else {
                                 None
                             }
@@ -1030,9 +1100,9 @@ pub fn run() {
                             None
                         };
 
-                        if let Some((repo_dir, Ok(local_events_path))) = context {
+                        if let Some((repo_dir, Ok(app_dir), device_id)) = context {
                             if sync::is_git_repo_dir(&repo_dir) {
-                                let push_result = sync_events_to_repo(&repo_dir, &local_events_path);
+                                let push_result = sync_events_to_repo(&repo_dir, &app_dir, &device_id);
                                 if let Ok(conn) = state.conn.lock() {
                                     match push_result {
                                         Ok(_) => {

@@ -1,11 +1,12 @@
 pub mod models;
 pub mod cleaner;
 pub mod metadata;
+pub mod segment;
+pub mod device_registry;
+pub mod cleanup;
 
 use rusqlite::Connection;
 use models::EventLog;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::Path;
 
 pub fn append_events_to_local_log(conn: &Connection, logs: &[EventLog]) -> Result<(), String> {
@@ -18,17 +19,10 @@ pub fn append_events_to_local_log(conn: &Connection, logs: &[EventLog]) -> Resul
     let app_dir = Path::new(db_path)
         .parent()
         .ok_or_else(|| "app dir unavailable".to_string())?;
-    let log_path = app_dir.join("events.ndjson");
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|e| e.to_string())?;
-    for log in logs {
-        let line = serde_json::to_string(log).map_err(|e| e.to_string())?;
-        writeln!(f, "{line}").map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    // 迁移旧版单文件（向后兼容）
+    segment::migrate_legacy_if_exists(app_dir)?;
+    // 追加到当前 segment（超限自动封口）
+    segment::append_to_current_segment(app_dir, logs)
 }
 
 pub fn replay_events(conn: &mut Connection, logs: Vec<EventLog>) -> Result<(), String> {
@@ -41,3 +35,4 @@ pub fn replay_events(conn: &mut Connection, logs: Vec<EventLog>) -> Result<(), S
     append_events_to_local_log(conn, &applied)?;
     Ok(())
 }
+
