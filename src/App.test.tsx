@@ -338,6 +338,19 @@ describe('App bookmark management', () => {
     });
   });
 
+  it('切换数据源时应调用 set_app_config 并刷新', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: '打开设置' }));
+    const toggle = await screen.findByRole('button', { name: /数据源：/ });
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('set_app_config', expect.objectContaining({
+        data_source: 'postgres',
+      }));
+    });
+  });
+
   it('设置页操作按钮应使用语义化按钮样式类', async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: '打开设置' }));

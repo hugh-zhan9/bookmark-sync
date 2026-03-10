@@ -78,6 +78,7 @@ function App() {
   const [backgroundOverlayOpacity, setBackgroundOverlayOpacity] = useState(45);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
+  const dataSource = appConfig?.data_source ?? "sqlite";
 
   useEffect(() => { refreshData(); loadDeleteSyncSetting(); loadSyncSettings(); loadAppearanceSettings(); }, []);
 
@@ -836,6 +837,34 @@ function App() {
                     } catch (e) { alert(e); }
                   }}
                 />
+              </div>
+
+              <div className="panel-section space-y-4">
+                <label className="block text-[10px] text-neutral-500 uppercase tracking-widest font-black">数据源</label>
+                <div className="flex gap-3 flex-wrap items-center">
+                  <button
+                    onClick={async () => {
+                      if (!appConfig) return;
+                      const next = dataSource === "sqlite" ? "postgres" : "sqlite";
+                      const ok = window.confirm("切换后不迁移旧数据源，以新数据源为准；PostgreSQL 连接信息需在 config.json 中配置。继续吗？");
+                      if (!ok) return;
+                      try {
+                        const updated = { ...appConfig, data_source: next };
+                        await invoke("set_app_config", updated);
+                        setAppConfig(updated);
+                        await refreshData();
+                      } catch (e) {
+                        alert(e);
+                        setAppConfig(appConfig);
+                      }
+                    }}
+                    className={`btn-base ${dataSource === "postgres" ? "btn-toggle-on" : "btn-toggle-off"}`}
+                  >
+                    数据源：{dataSource === "sqlite" ? "SQLite" : "PostgreSQL"}
+                  </button>
+                  <span className="text-xs text-neutral-500">PostgreSQL 模式下 Git 同步不可用</span>
+                </div>
+                <p className="text-xs text-neutral-500">连接信息请在 config.json 中修改</p>
               </div>
 
               <div className="panel-section space-y-4">
