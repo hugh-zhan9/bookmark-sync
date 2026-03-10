@@ -24,6 +24,8 @@ struct AppState {
     router: Mutex<DbRouter>,
     sync_lock: Mutex<()>,
     app_data_dir: PathBuf,
+    config: Mutex<config::AppConfig>,
+    config_dir: PathBuf,
 }
 
 fn debug_log_path_from_conn(conn: &rusqlite::Connection) -> Option<String> {
@@ -86,6 +88,37 @@ fn sqlite_only_sync_guard(kind: config::DataSourceKind) -> Result<(), String> {
     }
 }
 
+fn validate_pg_config(cfg: &config::AppConfig) -> Result<(), String> {
+    if cfg.postgres.host.trim().is_empty() {
+        return Err("postgres host 不能为空".into());
+    }
+    if cfg.postgres.db.trim().is_empty() {
+        return Err("postgres db 不能为空".into());
+    }
+    if cfg.postgres.user.trim().is_empty() {
+        return Err("postgres user 不能为空".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_app_config(state: State<'_, AppState>) -> Result<config::AppConfig, String> {
+    let cfg = state.config.lock().map_err(|e| e.to_string())?.clone();
+    Ok(cfg)
+}
+
+#[tauri::command]
+fn set_app_config(state: State<'_, AppState>, next: config::AppConfig) -> Result<(), String> {
+    if next.data_source == config::DataSourceKind::Postgres {
+        validate_pg_config(&next)?;
+    }
+    let mut router = state.router.lock().map_err(|e| e.to_string())?;
+    router.reinit(&next)?;
+    config::save(&state.config_dir, &next)?;
+    *state.config.lock().map_err(|e| e.to_string())? = next;
+    Ok(())
+}
+
 #[cfg(test)]
 mod data_source_tests {
     use super::*;
@@ -94,6 +127,15 @@ mod data_source_tests {
     fn sqlite_only_sync_should_block_pg() {
         let res = sqlite_only_sync_guard(config::DataSourceKind::Postgres);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn switch_should_reject_invalid_pg_config() {
+        let mut cfg = config::AppConfig::default();
+        cfg.data_source = config::DataSourceKind::Postgres;
+        cfg.postgres.host = "".into();
+        let err = validate_pg_config(&cfg).unwrap_err();
+        assert!(err.contains("postgres host"));
     }
 }
 
@@ -1301,12 +1343,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
-            let cfg = config::AppConfig::default();
+            let config_dir = app.path().app_config_dir().expect("Failed to get app config dir");
+            let cfg = config::load_or_init(&config_dir).expect("Failed to load config");
             let router = DbRouter::init(&cfg, app_data_dir.clone()).expect("Failed to initialize database");
             app.manage(AppState {
                 router: Mutex::new(router),
                 sync_lock: Mutex::new(()),
                 app_data_dir,
+                config: Mutex::new(cfg),
+                config_dir,
             });
             Ok(())
         })
@@ -1376,6 +1421,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            get_app_config, set_app_config,
             get_bookmarks, add_bookmark, search_bookmarks,
             check_bookmark_exists,
             import_browser_bookmarks, get_folders, get_bookmarks_by_folder,
