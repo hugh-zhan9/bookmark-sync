@@ -896,3 +896,12 @@
 - **Changed Files**:
 - `docs/plans/2026-03-10-data-source-toggle.md`
 ----------------------------------------
+## [2026-03-10 17:16] [Feature]
+- **Change**: 切换到 PostgreSQL 前增加连通性检测并保持失败时原数据源
+- **Risk Analysis**: 连接检测可能导致切换耗时或误判失败，需确认错误提示与状态保持一致
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src-tauri/src/db/router.rs`
+- `src-tauri/src/db/postgres.rs`
+- `src-tauri/src/lib.rs`
+----------------------------------------
