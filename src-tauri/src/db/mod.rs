@@ -4,6 +4,10 @@ use std::path::PathBuf;
 use crate::events::models::{EventLog, SyncEvent};
 
 pub mod browser_scanner;
+pub mod postgres;
+pub mod router;
+pub mod store;
+pub mod sqlite;
 
 pub fn init_db(app_dir: PathBuf) -> Result<Connection> {
     if !app_dir.exists() {
@@ -110,7 +114,7 @@ pub fn apply_event_if_new(conn: &Connection, log: &EventLog) -> Result<bool, Str
     Ok(true)
 }
 
-fn create_tables(conn: &Connection) -> Result<()> {
+pub fn create_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS event_cursors (

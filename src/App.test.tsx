@@ -64,6 +64,12 @@ describe('App bookmark management', () => {
       if (cmd === 'get_browser_auto_sync_settings') {
         return { startup_enabled: false, interval_enabled: false, interval_minutes: 5 };
       }
+      if (cmd === 'get_app_config') {
+        return {
+          data_source: 'sqlite',
+          postgres: { host: '127.0.0.1', port: 5432, db: 'bookmark_sync', user: 'bookmark', password: '', sslmode: 'prefer' },
+        };
+      }
       if (cmd === 'get_git_sync_repo_dir') {
         return '';
       }
@@ -195,6 +201,12 @@ describe('App bookmark management', () => {
       if (cmd === 'get_delete_sync_setting') return false;
       if (cmd === 'get_browser_auto_sync_settings') {
         return { startup_enabled: false, interval_enabled: false, interval_minutes: 5 };
+      }
+      if (cmd === 'get_app_config') {
+        return {
+          data_source: 'sqlite',
+          postgres: { host: '127.0.0.1', port: 5432, db: 'bookmark_sync', user: 'bookmark', password: '', sslmode: 'prefer' },
+        };
       }
       if (cmd === 'get_git_sync_repo_dir') return '';
       if (cmd === 'get_event_auto_sync_settings') {
@@ -393,6 +405,12 @@ describe('App bookmark management', () => {
       if (cmd === 'get_delete_sync_setting') return false;
       if (cmd === 'get_browser_auto_sync_settings') {
         return { startup_enabled: false, interval_enabled: false, interval_minutes: 5 };
+      }
+      if (cmd === 'get_app_config') {
+        return {
+          data_source: 'sqlite',
+          postgres: { host: '127.0.0.1', port: 5432, db: 'bookmark_sync', user: 'bookmark', password: '', sslmode: 'prefer' },
+        };
       }
       if (cmd === 'get_git_sync_repo_dir') return '';
       if (cmd === 'get_event_auto_sync_settings') {
