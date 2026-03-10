@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::events::models::{EventLog, SyncEvent};
 
 pub mod browser_scanner;
+pub mod router;
 
 pub fn init_db(app_dir: PathBuf) -> Result<Connection> {
     if !app_dir.exists() {
