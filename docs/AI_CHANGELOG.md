@@ -950,3 +950,12 @@
 - **Changed Files**:
 - `vite.config.ts`
 ----------------------------------------
+## [2026-03-10 17:54] [Bugfix]
+- **Change**: 增加前端错误捕获并写入调试日志
+- **Risk Analysis**: 错误捕获增加日志噪音，若 invoke 失败可能掩盖真实异常
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `src/errorCapture.ts`
+- `src/errorCapture.test.ts`
+- `src/main.tsx`
+----------------------------------------
