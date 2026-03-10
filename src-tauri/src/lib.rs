@@ -79,6 +79,24 @@ fn mark_pending_push(conn: &rusqlite::Connection, pending: bool) -> Result<(), S
     set_setting(conn, "event_sync_pending_push", if pending { "1" } else { "0" })
 }
 
+fn sqlite_only_sync_guard(kind: config::DataSourceKind) -> Result<(), String> {
+    match kind {
+        config::DataSourceKind::Sqlite => Ok(()),
+        config::DataSourceKind::Postgres => Err("Git 同步仅支持 SQLite 数据源".into()),
+    }
+}
+
+#[cfg(test)]
+mod data_source_tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_only_sync_should_block_pg() {
+        let res = sqlite_only_sync_guard(config::DataSourceKind::Postgres);
+        assert!(res.is_err());
+    }
+}
+
 fn app_dir_from_conn(conn: &rusqlite::Connection) -> Result<PathBuf, String> {
     let db_path = conn
         .path()
@@ -900,13 +918,15 @@ fn set_git_sync_repo_dir(state: State<'_, AppState>, repo_dir: String) -> Result
 #[tauri::command]
 fn sync_github_incremental(state: State<'_, AppState>) -> Result<(), String> {
     let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
+    let router = state.router.lock().map_err(|e| e.to_string())?;
+    sqlite_only_sync_guard(router.kind())?;
     let (repo_dir, app_dir, device_id) = {
         let conn = state
-        .router
-        .lock()
-        .map_err(|e| e.to_string())?
-        .sqlite_conn()?;
-    let conn = conn.lock().map_err(|e| e.to_string())?;
+            .router
+            .lock()
+            .map_err(|e| e.to_string())?
+            .sqlite_conn()?;
+        let conn = conn.lock().map_err(|e| e.to_string())?;
         let repo_dir = get_setting(&conn, "git_sync_repo_dir")
             .ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
         let app_dir = app_dir_from_conn(&conn)?;
@@ -920,22 +940,22 @@ fn sync_github_incremental(state: State<'_, AppState>) -> Result<(), String> {
     sync::git_pull_current_branch(&repo_dir)?;
     {
         let conn = state
-        .router
-        .lock()
-        .map_err(|e| e.to_string())?
-        .sqlite_conn()?;
-    let mut conn = conn.lock().map_err(|e| e.to_string())?;
+            .router
+            .lock()
+            .map_err(|e| e.to_string())?
+            .sqlite_conn()?;
+        let mut conn = conn.lock().map_err(|e| e.to_string())?;
         sync_events_from_repo(&mut conn, &repo_dir)?;
     }
 
     match sync_events_to_repo(&repo_dir, &app_dir, &device_id) {
         Ok(_) => {
             let conn = state
-        .router
-        .lock()
-        .map_err(|e| e.to_string())?
-        .sqlite_conn()?;
-    let conn = conn.lock().map_err(|e| e.to_string())?;
+                .router
+                .lock()
+                .map_err(|e| e.to_string())?
+                .sqlite_conn()?;
+            let conn = conn.lock().map_err(|e| e.to_string())?;
             mark_pending_push(&conn, false)?;
             Ok(())
         }
@@ -1104,13 +1124,15 @@ fn set_event_auto_sync_settings(
 #[tauri::command]
 fn sync_event_pull_only(state: State<'_, AppState>) -> Result<(), String> {
     let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
+    let router = state.router.lock().map_err(|e| e.to_string())?;
+    sqlite_only_sync_guard(router.kind())?;
     let (repo_dir, pending_push, app_dir, device_id) = {
         let conn = state
-        .router
-        .lock()
-        .map_err(|e| e.to_string())?
-        .sqlite_conn()?;
-    let conn = conn.lock().map_err(|e| e.to_string())?;
+            .router
+            .lock()
+            .map_err(|e| e.to_string())?
+            .sqlite_conn()?;
+        let conn = conn.lock().map_err(|e| e.to_string())?;
         let repo_dir = get_setting(&conn, "git_sync_repo_dir")
             .ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
         let pending_push = get_setting(&conn, "event_sync_pending_push")
@@ -1127,11 +1149,11 @@ fn sync_event_pull_only(state: State<'_, AppState>) -> Result<(), String> {
     sync::git_pull_current_branch(&repo_dir)?;
     {
         let conn = state
-        .router
-        .lock()
-        .map_err(|e| e.to_string())?
-        .sqlite_conn()?;
-    let mut conn = conn.lock().map_err(|e| e.to_string())?;
+            .router
+            .lock()
+            .map_err(|e| e.to_string())?
+            .sqlite_conn()?;
+        let mut conn = conn.lock().map_err(|e| e.to_string())?;
         sync_events_from_repo(&mut conn, &repo_dir)?;
     }
 
@@ -1164,13 +1186,15 @@ fn sync_event_pull_only(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 fn sync_event_push_only(state: State<'_, AppState>) -> Result<(), String> {
     let _sync_guard = state.sync_lock.lock().map_err(|e| e.to_string())?;
+    let router = state.router.lock().map_err(|e| e.to_string())?;
+    sqlite_only_sync_guard(router.kind())?;
     let (repo_dir, app_dir, device_id) = {
         let conn = state
-        .router
-        .lock()
-        .map_err(|e| e.to_string())?
-        .sqlite_conn()?;
-    let conn = conn.lock().map_err(|e| e.to_string())?;
+            .router
+            .lock()
+            .map_err(|e| e.to_string())?
+            .sqlite_conn()?;
+        let conn = conn.lock().map_err(|e| e.to_string())?;
         let repo_dir = get_setting(&conn, "git_sync_repo_dir")
             .ok_or_else(|| "请先设置 Git 仓库目录".to_string())?;
         let app_dir = app_dir_from_conn(&conn)?;
@@ -1183,21 +1207,21 @@ fn sync_event_push_only(state: State<'_, AppState>) -> Result<(), String> {
     match sync_events_to_repo(&repo_dir, &app_dir, &device_id) {
         Ok(_) => {
             let conn = state
-        .router
-        .lock()
-        .map_err(|e| e.to_string())?
-        .sqlite_conn()?;
-    let conn = conn.lock().map_err(|e| e.to_string())?;
+                .router
+                .lock()
+                .map_err(|e| e.to_string())?
+                .sqlite_conn()?;
+            let conn = conn.lock().map_err(|e| e.to_string())?;
             mark_pending_push(&conn, false)?;
             Ok(())
         }
         Err(e) => {
             let conn = state
-        .router
-        .lock()
-        .map_err(|e| e.to_string())?
-        .sqlite_conn()?;
-    let conn = conn.lock().map_err(|e| e.to_string())?;
+                .router
+                .lock()
+                .map_err(|e| e.to_string())?
+                .sqlite_conn()?;
+            let conn = conn.lock().map_err(|e| e.to_string())?;
             let _ = mark_pending_push(&conn, true);
             Err(e)
         }
