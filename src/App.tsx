@@ -845,12 +845,12 @@ function App() {
                   <button
                     onClick={async () => {
                       if (!appConfig) return;
-                      const next = dataSource === "sqlite" ? "postgres" : "sqlite";
+                      const next: DataSourceKind = dataSource === "sqlite" ? "postgres" : "sqlite";
                       const ok = window.confirm("切换后不迁移旧数据源，以新数据源为准；PostgreSQL 连接信息需在 config.json 中配置。继续吗？");
                       if (!ok) return;
                       try {
-                        const updated = { ...appConfig, data_source: next };
-                        await invoke("set_app_config", updated);
+                        const updated: AppConfig = { ...appConfig, data_source: next };
+                        await invoke("set_app_config", { next: updated });
                         setAppConfig(updated);
                         await refreshData();
                       } catch (e) {

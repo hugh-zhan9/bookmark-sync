@@ -346,7 +346,9 @@ describe('App bookmark management', () => {
     fireEvent.click(toggle);
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('set_app_config', expect.objectContaining({
-        data_source: 'postgres',
+        next: expect.objectContaining({
+          data_source: 'postgres',
+        }),
       }));
     });
   });
