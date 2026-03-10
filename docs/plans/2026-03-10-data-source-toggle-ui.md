@@ -1,16 +1,145 @@
-# Data Source Toggle UI Implementation Plan
+# Data Source Toggle With PG Precheck Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 在设置面板新增“数据源”小节，提供 SQLite/PostgreSQL 开关，切换立即生效并刷新数据，失败回滚并提示。
+**Goal:** 在设置面板新增“数据源”小节，并在切换到 PostgreSQL 前做连通性检测，失败保持原数据源；切换成功后立即刷新数据。
 
-**Architecture:** 前端通过 `get_app_config` 读取当前数据源状态，在设置面板渲染开关；切换时弹窗确认并调用 `set_app_config`，成功刷新数据，失败回滚 UI。
+**Architecture:** 前端通过 `get_app_config` 读取当前数据源状态并渲染开关；切换时弹窗确认并调用 `set_app_config`。后端在 `set_app_config` 中对 PostgreSQL 进行连通性检测并在失败时保持原路由与配置不变；成功后前端刷新数据。
 
-**Tech Stack:** React 19, TypeScript, Tauri invoke API, Vitest
+**Tech Stack:** React 19, TypeScript, Tauri, Rust, Vitest
 
 ---
 
-### Task 1: 读取当前数据源配置并进入前端状态
+### Task 1: 后端切换前 PostgreSQL 连通性检测与路由保护
+
+**Files:**
+- Modify: `src-tauri/src/db/router.rs`
+- Modify: `src-tauri/src/db/postgres.rs`
+- Modify: `src-tauri/src/lib.rs`
+- Test: `src-tauri/src/db/router.rs`
+- Test: `src-tauri/src/db/postgres.rs`
+
+**Step 1: Write the failing test**
+
+```rust
+// src-tauri/src/db/router.rs
+#[test]
+fn reinit_should_keep_previous_on_pg_failure() {
+    let dir = tempdir().expect("tmp dir");
+    let cfg = AppConfig::default();
+    let mut router = DbRouter::init(&cfg, dir.path().to_path_buf()).expect("init");
+
+    let mut pg_cfg = cfg.clone();
+    pg_cfg.data_source = DataSourceKind::Postgres;
+    pg_cfg.postgres.host = "127.0.0.1".into();
+    pg_cfg.postgres.port = 1;
+
+    let err = router.reinit(&pg_cfg).unwrap_err();
+    assert!(!err.is_empty());
+    assert_eq!(router.kind(), DataSourceKind::Sqlite);
+}
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `cargo test --manifest-path src-tauri/Cargo.toml reinit_should_keep_previous_on_pg_failure`
+Expected: FAIL with `router.kind()` changed or missing test
+
+**Step 3: Write minimal implementation**
+
+```rust
+// src-tauri/src/db/router.rs
+pub fn reinit(&mut self, cfg: &AppConfig) -> Result<(), String> {
+    match cfg.data_source {
+        DataSourceKind::Sqlite => {
+            let conn = db::init_db(self.app_data_dir.clone()).map_err(|e| e.to_string())?;
+            self.sqlite = Some(Arc::new(Mutex::new(conn)));
+            self.pg = None;
+            self.kind = DataSourceKind::Sqlite;
+        }
+        DataSourceKind::Postgres => {
+            let pool = postgres::init_db(&cfg.postgres)?;
+            self.pg = Some(pool);
+            self.sqlite = None;
+            self.kind = DataSourceKind::Postgres;
+        }
+    }
+    Ok(())
+}
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `cargo test --manifest-path src-tauri/Cargo.toml reinit_should_keep_previous_on_pg_failure`
+Expected: PASS
+
+**Step 5: Write the failing test for PG connectivity check**
+
+```rust
+// src-tauri/src/db/postgres.rs
+#[test]
+fn test_connection_should_fail_on_bad_host() {
+    let cfg = PostgresConfig {
+        host: "127.0.0.1".into(),
+        port: 1,
+        db: "bookmark_sync".into(),
+        user: "bookmark".into(),
+        password: "".into(),
+        sslmode: "prefer".into(),
+    };
+    let err = test_connection(&cfg).unwrap_err();
+    assert!(!err.is_empty());
+}
+```
+
+**Step 6: Run test to verify it fails**
+
+Run: `cargo test --manifest-path src-tauri/Cargo.toml test_connection_should_fail_on_bad_host`
+Expected: FAIL with unresolved function `test_connection`
+
+**Step 7: Write minimal implementation**
+
+```rust
+// src-tauri/src/db/postgres.rs
+pub fn test_connection(cfg: &PostgresConfig) -> Result<(), String> {
+    let dsn = build_dsn(&cfg.host, cfg.port, &cfg.db, &cfg.user, &cfg.password, &cfg.sslmode);
+    let mut client = postgres::Client::connect(&dsn, NoTls).map_err(|e| e.to_string())?;
+    client.simple_query("SELECT 1").map_err(|e| e.to_string())?;
+    Ok(())
+}
+```
+
+```rust
+// src-tauri/src/lib.rs
+fn set_app_config(state: State<'_, AppState>, next: config::AppConfig) -> Result<(), String> {
+    if next.data_source == config::DataSourceKind::Postgres {
+        validate_pg_config(&next)?;
+        db::postgres::test_connection(&next.postgres)?;
+    }
+    let mut router = state.router.lock().map_err(|e| e.to_string())?;
+    router.reinit(&next)?;
+    config::save(&state.config_dir, &next)?;
+    *state.config.lock().map_err(|e| e.to_string())? = next;
+    Ok(())
+}
+```
+
+**Step 8: Run test to verify it passes**
+
+Run: `cargo test --manifest-path src-tauri/Cargo.toml test_connection_should_fail_on_bad_host`
+Expected: PASS
+
+**Step 9: Commit**
+
+```bash
+git add src-tauri/src/db/router.rs src-tauri/src/db/postgres.rs src-tauri/src/lib.rs
+python3 "/Users/zhangyukun/.codex/skills/flight-recorder/scripts/log_change.py" "Feature" "切换到 PostgreSQL 前做连通性检测" "连接失败时应保持原数据源，避免路由状态不一致" "S2" "src-tauri/src/db/router.rs,src-tauri/src/db/postgres.rs,src-tauri/src/lib.rs"
+git commit -m "feat: add postgres precheck for data source switch"
+```
+
+---
+
+### Task 2: 读取当前数据源配置并进入前端状态
 
 **Files:**
 - Modify: `src/App.tsx`
@@ -91,7 +220,7 @@ git commit -m "feat: load data source config in settings"
 
 ---
 
-### Task 2: 设置面板新增“数据源”小节并实现切换逻辑
+### Task 3: 设置面板新增“数据源”小节并实现切换逻辑
 
 **Files:**
 - Modify: `src/App.tsx`
