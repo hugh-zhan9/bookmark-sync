@@ -5,10 +5,15 @@ use rusqlite::Connection;
 
 use crate::config::{AppConfig, DataSourceKind};
 use crate::db;
+use crate::db::postgres;
+use r2d2::Pool;
+use r2d2_postgres::PostgresConnectionManager;
+use r2d2_postgres::postgres::tls::NoTls;
 
 pub struct DbRouter {
     kind: DataSourceKind,
     sqlite: Option<Arc<Mutex<Connection>>>,
+    pg: Option<Pool<PostgresConnectionManager<NoTls>>>,
     app_data_dir: PathBuf,
 }
 
@@ -17,6 +22,7 @@ impl DbRouter {
         let mut router = Self {
             kind: cfg.data_source,
             sqlite: None,
+            pg: None,
             app_data_dir,
         };
         router.reinit(cfg)?;
@@ -37,10 +43,12 @@ impl DbRouter {
             DataSourceKind::Sqlite => {
                 let conn = db::init_db(self.app_data_dir.clone()).map_err(|e| e.to_string())?;
                 self.sqlite = Some(Arc::new(Mutex::new(conn)));
+                self.pg = None;
             }
             DataSourceKind::Postgres => {
+                let pool = postgres::init_db(&cfg.postgres)?;
+                self.pg = Some(pool);
                 self.sqlite = None;
-                return Err("postgres not initialized".into());
             }
         }
         Ok(())
@@ -51,6 +59,10 @@ impl DbRouter {
             .as_ref()
             .ok_or_else(|| "sqlite unavailable".to_string())
             .map(Arc::clone)
+    }
+
+    pub fn pg_pool(&self) -> Result<&Pool<PostgresConnectionManager<NoTls>>, String> {
+        self.pg.as_ref().ok_or_else(|| "postgres unavailable".to_string())
     }
 }
 
