@@ -6,6 +6,7 @@ use crate::events::models::{EventLog, SyncEvent};
 pub mod browser_scanner;
 pub mod postgres;
 pub mod router;
+pub mod store;
 
 pub fn init_db(app_dir: PathBuf) -> Result<Connection> {
     if !app_dir.exists() {
