@@ -19,6 +19,18 @@ interface UiAppearanceSettings {
   background_image_data_url: string | null;
   background_overlay_opacity: number;
 }
+type DataSourceKind = "sqlite" | "postgres";
+interface AppConfig {
+  data_source: DataSourceKind;
+  postgres: {
+    host: string;
+    port: number;
+    db: string;
+    user: string;
+    password: string;
+    sslmode: string;
+  };
+}
 interface BookmarkExistsResult {
   exists: boolean;
   title?: string | null;
@@ -64,6 +76,7 @@ function App() {
   const [backgroundEnabled, setBackgroundEnabled] = useState(false);
   const [backgroundImageDataUrl, setBackgroundImageDataUrl] = useState<string | null>(null);
   const [backgroundOverlayOpacity, setBackgroundOverlayOpacity] = useState(45);
+  const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => { refreshData(); loadDeleteSyncSetting(); loadSyncSettings(); loadAppearanceSettings(); }, []);
@@ -143,6 +156,20 @@ function App() {
     media.addListener(listener);
     return () => media.removeListener(listener);
   }, [themeMode]);
+
+  const loadAppConfig = useCallback(async () => {
+    try {
+      const cfg = await invoke<AppConfig>("get_app_config");
+      setAppConfig(cfg);
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    loadAppConfig();
+  }, [showSettings, loadAppConfig]);
 
   async function refreshData() {
     await fetchFolders();

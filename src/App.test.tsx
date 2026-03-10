@@ -193,6 +193,14 @@ describe('App bookmark management', () => {
     });
   });
 
+  it('打开设置时应读取数据源配置', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByLabelText('打开设置'));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('get_app_config');
+    });
+  });
+
   it('启动时应按事件同步设置执行 pull-only', async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === 'get_folders') return [];

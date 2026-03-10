@@ -905,3 +905,11 @@
 - `src-tauri/src/db/postgres.rs`
 - `src-tauri/src/lib.rs`
 ----------------------------------------
+## [2026-03-10 17:19] [Feature]
+- **Change**: 设置面板打开时加载数据源配置
+- **Risk Analysis**: 读取配置失败可能导致数据源开关状态不准确
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src/App.tsx`
+- `src/App.test.tsx`
+----------------------------------------
