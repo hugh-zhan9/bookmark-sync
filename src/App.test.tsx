@@ -193,6 +193,14 @@ describe('App bookmark management', () => {
     });
   });
 
+  it('打开设置时应读取数据源配置', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByLabelText('打开设置'));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('get_app_config');
+    });
+  });
+
   it('启动时应按事件同步设置执行 pull-only', async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === 'get_folders') return [];
@@ -327,6 +335,19 @@ describe('App bookmark management', () => {
     });
     await waitFor(() => {
       expect((container.firstChild as HTMLElement | null)?.getAttribute('data-theme')).toBe('light');
+    });
+  });
+
+  it('切换数据源时应调用 set_app_config 并刷新', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: '打开设置' }));
+    const toggle = await screen.findByRole('button', { name: /数据源：/ });
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('set_app_config', expect.objectContaining({
+        data_source: 'postgres',
+      }));
     });
   });
 

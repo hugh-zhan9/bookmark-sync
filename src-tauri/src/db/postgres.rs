@@ -25,6 +25,13 @@ pub fn init_db(cfg: &PostgresConfig) -> Result<Pool<PostgresConnectionManager<No
     Ok(pool)
 }
 
+pub fn test_connection(cfg: &PostgresConfig) -> Result<(), String> {
+    let dsn = build_dsn(&cfg.host, cfg.port, &cfg.db, &cfg.user, &cfg.password, &cfg.sslmode);
+    let mut client = Client::connect(&dsn, NoTls).map_err(|e| e.to_string())?;
+    client.simple_query("SELECT 1").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn bookmark_select_sql() -> String {
     "
     SELECT b.id, b.url, b.title, b.description, b.favicon_url, b.host, b.created_at,
@@ -373,6 +380,7 @@ fn create_tables(client: &mut Client) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::PostgresConfig;
 
     #[test]
     fn build_dsn_should_format_connection_string() {
@@ -386,5 +394,19 @@ mod tests {
     fn pg_search_sql_should_use_string_agg() {
         let sql = bookmark_select_sql();
         assert!(sql.contains("STRING_AGG"));
+    }
+
+    #[test]
+    fn test_connection_should_fail_on_bad_host() {
+        let cfg = PostgresConfig {
+            host: "127.0.0.1".into(),
+            port: 1,
+            db: "bookmark_sync".into(),
+            user: "bookmark".into(),
+            password: "".into(),
+            sslmode: "prefer".into(),
+        };
+        let err = test_connection(&cfg).unwrap_err();
+        assert!(!err.is_empty());
     }
 }

@@ -109,8 +109,13 @@ fn get_app_config(state: State<'_, AppState>) -> Result<config::AppConfig, Strin
 
 #[tauri::command]
 fn set_app_config(state: State<'_, AppState>, next: config::AppConfig) -> Result<(), String> {
+    apply_app_config(&state, next)
+}
+
+fn apply_app_config(state: &AppState, next: config::AppConfig) -> Result<(), String> {
     if next.data_source == config::DataSourceKind::Postgres {
         validate_pg_config(&next)?;
+        db::postgres::test_connection(&next.postgres)?;
     }
     let mut router = state.router.lock().map_err(|e| e.to_string())?;
     router.reinit(&next)?;
@@ -122,6 +127,7 @@ fn set_app_config(state: State<'_, AppState>, next: config::AppConfig) -> Result
 #[cfg(test)]
 mod data_source_tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn sqlite_only_sync_should_block_pg() {
@@ -136,6 +142,33 @@ mod data_source_tests {
         cfg.postgres.host = "".into();
         let err = validate_pg_config(&cfg).unwrap_err();
         assert!(err.contains("postgres host"));
+    }
+
+    #[test]
+    fn set_app_config_should_keep_sqlite_on_pg_connection_failure() {
+        let app_dir = tempdir().expect("app dir");
+        let config_dir = tempdir().expect("config dir");
+        let cfg = config::AppConfig::default();
+        let router = DbRouter::init(&cfg, app_dir.path().to_path_buf()).expect("init router");
+        let state = AppState {
+            router: Mutex::new(router),
+            sync_lock: Mutex::new(()),
+            app_data_dir: app_dir.path().to_path_buf(),
+            config: Mutex::new(cfg.clone()),
+            config_dir: config_dir.path().to_path_buf(),
+        };
+
+        let mut next = cfg.clone();
+        next.data_source = config::DataSourceKind::Postgres;
+        next.postgres.host = "127.0.0.1".into();
+        next.postgres.port = 1;
+
+        let err = apply_app_config(&state, next).unwrap_err();
+        assert!(!err.is_empty());
+        let current = state.config.lock().expect("config lock").clone();
+        assert_eq!(current.data_source, config::DataSourceKind::Sqlite);
+        let router_kind = state.router.lock().expect("router lock").kind();
+        assert_eq!(router_kind, config::DataSourceKind::Sqlite);
     }
 }
 

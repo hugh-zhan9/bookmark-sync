@@ -910,7 +910,7 @@
 - **Changed Files**:
 - `docs/plans/2026-03-10-data-source-toggle-ui.md`
 ----------------------------------------
-## [2026-03-10 17:15] [Feature]
+## [2026-03-10 17:16] [Feature]
 - **Change**: 切换到 PostgreSQL 前增加连通性检测并保持失败时原数据源
 - **Risk Analysis**: 连接检测可能导致切换耗时或误判失败，需确认错误提示与状态保持一致
 - **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
@@ -918,4 +918,20 @@
 - `src-tauri/src/db/router.rs`
 - `src-tauri/src/db/postgres.rs`
 - `src-tauri/src/lib.rs`
+----------------------------------------
+## [2026-03-10 17:19] [Feature]
+- **Change**: 设置面板打开时加载数据源配置
+- **Risk Analysis**: 读取配置失败可能导致数据源开关状态不准确
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src/App.tsx`
+- `src/App.test.tsx`
+----------------------------------------
+## [2026-03-10 17:22] [Feature]
+- **Change**: 设置页新增数据源切换开关
+- **Risk Analysis**: 切换失败时提示与状态回滚处理不当可能导致界面与实际数据源不一致
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src/App.tsx`
+- `src/App.test.tsx`
 ----------------------------------------
