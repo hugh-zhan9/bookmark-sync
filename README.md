@@ -21,6 +21,32 @@
 - `src-tauri/`：Tauri Rust 后端
 - `docs/`：需求、技术设计、开发计划、AI 变更记录
 
+## 数据源切换（SQLite / PostgreSQL）
+
+应用支持通过本地配置文件在 SQLite 与 PostgreSQL 间切换数据源：
+
+- 配置文件路径：`app_config_dir/config.json`
+- 当 `data_source = "sqlite"` 时启用 Git 同步
+- 当 `data_source = "postgres"` 时禁用 Git 同步
+- 切换数据源不会迁移旧数据源数据，切换后以当前数据源为准
+- PostgreSQL 连接信息明文保存在配置文件中，请注意安全
+
+示例配置：
+
+```json
+{
+  "data_source": "sqlite",
+  "postgres": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "db": "bookmark_sync",
+    "user": "bookmark",
+    "password": "",
+    "sslmode": "prefer"
+  }
+}
+```
+
 ## 本地开发
 
 在仓库根目录执行：
