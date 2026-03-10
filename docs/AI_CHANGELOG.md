@@ -816,3 +816,83 @@
 - **Changed Files**:
 - `src-tauri/src/lib.rs`
 ----------------------------------------
+## [2026-03-10 15:14] [Feature]
+- **Change**: 新增应用配置文件读写与默认配置
+- **Risk Analysis**: 配置文件路径与权限问题可能导致读取失败
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src-tauri/src/config.rs`
+- `src-tauri/src/lib.rs`
+----------------------------------------
+## [2026-03-10 15:23] [Refactor]
+- **Change**: 引入数据源路由骨架并替换 AppState 访问路径
+- **Risk Analysis**: SQLite 路由与生命周期调整可能影响同步关闭流程
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src-tauri/src/db/router.rs`
+- `src-tauri/src/db/mod.rs`
+- `src-tauri/src/lib.rs`
+----------------------------------------
+## [2026-03-10 15:28] [Feature]
+- **Change**: 新增 PostgreSQL 连接与建表
+- **Risk Analysis**: 连接字符串与权限配置错误会导致初始化失败
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src-tauri/Cargo.toml`
+- `src-tauri/Cargo.lock`
+- `src-tauri/src/db/postgres.rs`
+- `src-tauri/src/db/router.rs`
+- `src-tauri/src/db/mod.rs`
+----------------------------------------
+## [2026-03-10 15:30] [Refactor]
+- **Change**: 抽象数据库操作接口以支持多数据源
+- **Risk Analysis**: 接口不完整会导致后续实现缺失
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src-tauri/src/db/store.rs`
+- `src-tauri/src/db/mod.rs`
+----------------------------------------
+## [2026-03-10 15:34] [Refactor]
+- **Change**: SQLite 存储迁移到统一接口
+- **Risk Analysis**: 接口迁移遗漏会导致运行期查询异常
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src-tauri/src/db/sqlite.rs`
+- `src-tauri/src/db/mod.rs`
+----------------------------------------
+## [2026-03-10 15:39] [Feature]
+- **Change**: 实现 Postgres Store 并接入路由
+- **Risk Analysis**: SQL 语法差异或类型映射错误可能导致运行期失败
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src-tauri/src/db/postgres.rs`
+----------------------------------------
+## [2026-03-10 15:43] [Feature]
+- **Change**: Git 同步仅在 SQLite 模式可用
+- **Risk Analysis**: 错误分支可能导致同步被意外阻断
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src-tauri/src/lib.rs`
+----------------------------------------
+## [2026-03-10 15:47] [Feature]
+- **Change**: 新增数据源切换命令与配置校验
+- **Risk Analysis**: 切换失败会导致状态与配置不一致
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `src-tauri/src/lib.rs`
+- `src/App.test.tsx`
+----------------------------------------
+## [2026-03-10 15:51] [Docs]
+- **Change**: 更新数据源配置与切换说明
+- **Risk Analysis**: 文档遗漏可能导致用户误操作
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `README.md`
+----------------------------------------
+## [2026-03-10 15:55] [Docs]
+- **Change**: 补充数据源切换实现计划文档
+- **Risk Analysis**: 计划文档缺失可能影响执行一致性
+- **Risk Level**: S3（低级: 轻微行为偏差或日志/可观测性影响）
+- **Changed Files**:
+- `docs/plans/2026-03-10-data-source-toggle.md`
+----------------------------------------
